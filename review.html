@@ -222,7 +222,12 @@ function nextToReview() {
 // ------------------------------------------------------------------ committed / skipped / failed
 function renderEntry(source, e) {
   const actions = {
-    committed: `<p>Committed <b>${esc(e.variant || "")}</b> on ${esc((e.updated || "").replace("T", " "))}. Added:
+    committed: e.kind === "con" ? `<p>Converted from a CON file and committed <b>${esc(e.variant || "")}</b> on
+      ${esc((e.updated || "").replace("T", " "))}. New song folder: <code>${esc(e.folder || "")}</code>.
+      The CON file was moved to <code>${esc(e.con_backup || "")}</code> so YARG doesn't list the song twice.</p>
+      <button class="btn danger" id="act">Undo commit</button>
+      <p class="note">Undo moves the CON file back where it was, removes the files the conversion created, and puts the song back in the queue to be split again.</p>`
+      : `<p>Committed <b>${esc(e.variant || "")}</b> on ${esc((e.updated || "").replace("T", " "))}. Added:
       <code>${esc((e.files || []).join(", "))}</code>; the original song audio is kept as a <code>.orig</code> backup.</p>
       <button class="btn danger" id="act">Undo commit</button>
       <p class="note">Undo deletes the added stem files, restores the original song audio, and puts the song back in the queue to be split again.</p>`,
@@ -330,8 +335,11 @@ function render() {
       <div class="card">
         <h3>Decide</h3>
         <div class="row"><button class="btn primary" id="commit">Commit this version</button><button class="btn" id="skip">Skip song</button></div>
-        <p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
-          ${esc(s.song_file || "song.ogg")}.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>
+        ${s.con ? `<p class="note">This song came from the CON file <b>${esc(songFolder)}</b>. Commit creates the folder
+          <b>${esc(s.con.folder_name)}</b> next to it (stems, chart, song.ini and album art) and moves the CON file to the
+          con-backups folder, so YARG doesn't list the song twice. You can undo it later. Skip leaves the CON file untouched.</p>`
+        : `<p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
+          ${esc(s.song_file || "song.ogg")}.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>`}
         <div class="status-msg" id="decide-msg"></div>
       </div>
       <div class="card">
@@ -541,6 +549,7 @@ async function renderSetup() {
       </div>
       <div class="status-msg" id="scan-msg"></div>
       <div id="q-status"></div>
+      ${lib.cons_text ? `<p class="note">CON files found: ${esc(lib.cons_text)}. Encrypted CON audio is never decrypted.</p>` : ""}
       <p class="note">Takes about 40–60 seconds per song on your GPU. You can review songs while it runs, close the page, or stop and start again later; it carries on where it left off.</p>
     </div>
     <div class="card">
@@ -570,7 +579,8 @@ async function renderSetup() {
     try {
       const r = await api("scan", {});
       msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song audio file; ${r.todo} still to split` +
-        (r.todo ? ` (about ${Math.max(1, Math.round(r.todo * 0.75))} min).` : "."));
+        (r.todo ? ` (about ${Math.max(1, Math.round(r.todo * 0.75))} min).` : ".") +
+        (r.cons_text ? ` CON files: ${r.cons_text}.` : ""));
       refresh();
     } catch (err) { msg("#scan-msg", err.message, true); }
   };

@@ -454,30 +454,34 @@ def read_manifest(folder):
     return data
 
 
-def staged_name(staging, song_dir):
+def staged_name(staging, song_dir, source):
     """Staging folder name for a song; disambiguated if another song has the same folder name."""
     name = song_dir.name
     m = read_manifest(staging / name)
-    if (staging / name).exists() and (m is None or m.get("source") != str(song_dir)):
-        name = f"{song_dir.name} ~{hashlib.sha1(str(song_dir).encode()).hexdigest()[:6]}"
+    if (staging / name).exists() and (m is None or m.get("source") != source):
+        name = f"{song_dir.name} ~{hashlib.sha1(source.encode()).hexdigest()[:6]}"
     return name
 
 
-def split_song(song_dir, model=DEFAULT_MODEL, staging=STAGING_DIR):
-    """Separate one song folder into staging. Returns (staging folder name, report)."""
+def split_song(song_dir, model=DEFAULT_MODEL, staging=STAGING_DIR, source=None, extra=None):
+    """Separate one song folder into staging. Returns (staging folder name, report).
+
+    source: what the song is tracked as (defaults to the folder; a CON file path for
+    songs extracted from a CON). extra: additional manifest fields (e.g. "con")."""
     song_dir, staging = Path(song_dir).resolve(), Path(staging)
+    source = str(source or song_dir)
     src = song_audio(song_dir)
     if src is None:
         raise ValueError(f"no song audio ({', '.join('song' + e for e in SONG_EXTS)}) in {song_dir}")
     mix, sr = read_audio(src)
     charted = charted_instruments(song_dir)
     files, report, raw = split_mix(mix, sr, charted, model, chart_spans(song_dir))
-    report.update(song=song_dir.name, source=str(song_dir), kind="split", charted=charted,
-                  song_file=src.name, original_file=f"original{src.suffix.lower()}")
-    name = staged_name(staging, song_dir)
+    report.update(song=song_dir.name, source=source, chart_dir=str(song_dir), kind="split", charted=charted,
+                  song_file=src.name, original_file=f"original{src.suffix.lower()}", **(extra or {}))
+    name = staged_name(staging, song_dir, source)
     for other in staging.glob("*/manifest.json"):  # variants of an earlier split are now stale
         m = read_manifest(other.parent)
-        if m and m.get("source") == str(song_dir) and m.get("variant_of"):
+        if m and m.get("source") == source and m.get("variant_of"):
             shutil.rmtree(other.parent)
     write_outputs(staging / name, files, sr, report, original=src, raw=raw)
     return name, report
@@ -492,7 +496,8 @@ def remix(staged, fill=(), gate_song_db=None):
     original = staged / report.get("original_file", "original.ogg")
     mix, sr = read_audio(original)
     stems = {p.stem: fit_length(read_audio(p)[0], len(mix), mix.shape[1]) for p in raw_dir.glob("*.ogg")}
-    files, new = assemble(mix, sr, stems, report["charted"], chart_spans(report["source"]), list(fill), gate_song_db)
+    chart_dir = report.get("chart_dir", report["source"])
+    files, new = assemble(mix, sr, stems, report["charted"], chart_spans(chart_dir), list(fill), gate_song_db)
     parts = []
     if fill:
         parts.append("+".join({"piano": "keys"}.get(s, s) for s in fill) + " from other")
@@ -503,7 +508,9 @@ def remix(staged, fill=(), gate_song_db=None):
     new.update(model=report["model"], seconds=report["seconds"], song=f"{base} [{label}]", variant=label,
                source=report["source"], kind="split", charted=report["charted"], variant_of=base,
                raw_from=base_folder, song_file=report.get("song_file", "song.ogg"),
-               original_file=original.name)
+               original_file=original.name, chart_dir=chart_dir)
+    if report.get("con"):
+        new["con"] = report["con"]
     name = f"{base_folder} [{label}]"
     write_outputs(staged.parent / name, files, sr, new, original=original)
     return name

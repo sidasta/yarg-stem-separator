@@ -13,8 +13,25 @@ lets you listen and choose, then writes the result into the song folder (undoabl
 - Needs Windows and an NVIDIA graphics card (the separation is done by an AI model).
 - Works with song folders whose audio is `song.ogg`, `song.opus`, `song.mp3` or `song.wav`.
   New tracks are always written as `.ogg`. Most testing has been on `.ogg` songs.
-- Rock Band CON packages (`*_rb3con` etc.) aren't handled: they normally already have
-  separate tracks, and YARG plays them directly.
+- Rock Band CON packages are supported when they hold a single song whose audio is
+  **unencrypted** and is one full mix in the backing track (common for customs that
+  aren't multitrack). Encrypted CON audio is never decrypted; those, multi-song packs and
+  CONs that already have separate tracks are skipped and counted on the page.
+
+## CON packages
+
+The scan recognises CON files by their header (any file name). A usable one is staged
+like any other song: the backing audio, chart (`notes.mid`), a `song.ini` built from its
+`songs.dta` and the album art are extracted into `staging/_con/`. Nothing changes in the
+library until you commit. Then:
+
+- a folder `Artist - Title` is created next to the CON with the stems, chart, `song.ini`
+  and `album.png`;
+- the CON file is moved to `con-backups/` (next to `staging/`, outside your library) so
+  YARG doesn't list the song twice;
+- **Undo** moves the CON back and removes the files the conversion created.
+
+Difficulties in `song.ini` are mapped from the CON's Rock Band difficulty ratings.
 
 ## Quick start
 

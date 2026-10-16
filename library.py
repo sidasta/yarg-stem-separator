@@ -21,6 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import rbcon as con
 import stemsplit
 
 RECORD_NAME = "stemsplit-commit.json"
@@ -111,6 +112,39 @@ def sync_staged(staging):
                 set_song(state, m["source"], status="split", staged=folder, flags=m.get("flags", []))
 
 
+# Files that are never CON packages, so scans don't open them.
+NOT_CON_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".flac", ".mid", ".midi", ".chart", ".ini", ".png", ".jpg",
+                ".jpeg", ".webm", ".mp4", ".avi", ".mkv", ".txt", ".json", ".bak", ".orig", ".dta", ".mogg",
+                ".sng", ".zip", ".rar", ".7z", ".exe", ".dll", ".lnk", ".url", ".tmp"}
+
+
+def con_backup_dir(staging):
+    """Where committed CON files are moved: outside the library, next to the staging folder."""
+    return Path(staging).resolve().parent / "con-backups"
+
+
+def con_work_dir(staging):
+    return Path(staging) / "_con"
+
+
+def find_cons(roots):
+    """Rock Band CON packages under roots (detected by their file header, not their name)."""
+    for root in map(Path, roots):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for f in filenames:
+                p = Path(dirpath) / f
+                if p.suffix.lower() in NOT_CON_EXTS or f.lower() == "desktop.ini":
+                    continue
+                try:
+                    if p.stat().st_size < 64 * 1024:
+                        continue
+                except OSError:
+                    continue
+                if con.looks_like_con(p):
+                    yield p.resolve()
+
+
 def find_songs(roots):
     """Song folders under roots that have a single song audio file and no separate stems yet."""
     for root in map(Path, roots):
@@ -149,16 +183,48 @@ def save_settings(staging, settings):
 # ---------------------------------------------------------------- queue
 
 def scan(roots, staging, retry_failed=False):
-    """Register newly found songs as pending. Returns (found count, list of song folders to split)."""
+    """Register newly found songs (folders and convertible CONs) as pending.
+
+    Returns (found count, list of sources to split, {CON status: count})."""
     sync_staged(staging)
     found = list(find_songs(roots))
+    cons = {}
+    for path in find_cons(roots):  # inspect each CON once; re-inspect only if the file changes
+        st = path.stat()
+        cons[str(path)] = (st.st_size, int(st.st_mtime))
     with edit_state(staging) as state:
+        cache = state.setdefault("cons", {})
+    for key, (size, mtime) in cons.items():
+        c = cache.get(key)
+        if not c or c.get("size") != size or c.get("mtime") != mtime:
+            cache[key] = {**con.inspect(key), "size": size, "mtime": mtime}
+    con_counts = {}
+    with edit_state(staging) as state:
+        state["cons"] = {k: v for k, v in cache.items() if k in cons}
         for song_dir in found:
             if str(song_dir) not in state["songs"]:
                 set_song(state, song_dir, status="pending")
+        for key, info in state["cons"].items():
+            con_counts[info["status"]] = con_counts.get(info["status"], 0) + 1
+            if info["status"] == "convertible" and key not in state["songs"]:
+                set_song(state, key, status="pending", kind="con", name=f"{info['artist']} - {info['name']}")
         todo = [Path(s) for s, e in state["songs"].items()
                 if e["status"] == "pending" or (retry_failed and e["status"] == "failed")]
-    return len(found), [s for s in todo if stemsplit.song_audio(s)]
+    todo = [s for s in todo if (s.is_file() if str(s) in cons else stemsplit.song_audio(s))]
+    return len(found) + con_counts.get("convertible", 0), todo, con_counts
+
+
+def _split_source(source, model, staging, entry):
+    """Split a song folder, or extract a CON into staging and split that."""
+    if entry.get("kind") != "con":
+        return stemsplit.split_song(source, model, staging)
+    key = hashlib.sha1(str(source).encode()).hexdigest()[:8]
+    work = con_work_dir(staging) / key / con.safe_folder_name(entry["name"])
+    if work.parent.exists():
+        shutil.rmtree(work.parent)
+    con.extract(source, work)
+    extra = {"con": {"path": str(source), "sha1": _sha1(source), "work_dir": str(work), "folder_name": work.name}}
+    return stemsplit.split_song(work, model, staging, source=str(source), extra=extra)
 
 
 def suggested_fill(report):
@@ -177,10 +243,13 @@ def run_queue(roots, staging, model=stemsplit.DEFAULT_MODEL, retry_failed=False,
     progress(dict) is called before each song and at the end; should_stop() is checked between songs.
     """
     staging = Path(staging)
-    found, todo = scan(roots, staging, retry_failed)
+    found, todo, con_counts = scan(roots, staging, retry_failed)
     if limit:
         todo = todo[:limit]
+    names = {s: e.get("name", Path(s).name) for s, e in load_state(staging)["songs"].items()}
     log(f"Found {found} single-file songs; {len(todo)} to split now.")
+    if con_counts:
+        log("CON files: " + describe_cons(con_counts))
     stats = {"total": len(todo), "done": 0, "flagged": 0, "failed": 0, "current": None, "eta_min": None}
     t0 = time.time()
     for i, song_dir in enumerate(todo, 1):
@@ -190,13 +259,15 @@ def run_queue(roots, staging, model=stemsplit.DEFAULT_MODEL, retry_failed=False,
         if stats["done"] + stats["failed"]:
             per_song = (time.time() - t0) / (stats["done"] + stats["failed"])
             stats["eta_min"] = round(per_song * (len(todo) - i + 1) / 60)
-        stats["current"] = song_dir.name
+        name = names.get(str(song_dir), song_dir.name)
+        stats["current"] = name
         if progress:
             progress(dict(stats))
         eta = f", ~{stats['eta_min']} min left" if stats["eta_min"] is not None else ""
-        log(f"[{i}/{len(todo)}{eta}] {song_dir.name}")
+        log(f"[{i}/{len(todo)}{eta}] {name}")
         try:
-            folder, report = stemsplit.split_song(song_dir, model, staging)
+            entry = load_state(staging)["songs"].get(str(song_dir), {})
+            folder, report = _split_source(song_dir, model, staging, entry)
         except Exception as e:  # keep going; the song is marked failed with the reason
             stats["failed"] += 1
             log(f"   FAILED: {e}")
@@ -223,6 +294,13 @@ def run_queue(roots, staging, model=stemsplit.DEFAULT_MODEL, retry_failed=False,
         progress(dict(stats))
     log(f"Split {stats['done']} songs ({stats['flagged']} flagged for a closer listen), {stats['failed']} failed.")
     return stats
+
+
+def describe_cons(counts):
+    labels = {"convertible": "single-mix, will be split", "encrypted": "encrypted audio, skipped",
+              "multitrack": "already have separate tracks, skipped", "pack": "multi-song packs, skipped",
+              "unsupported": "unreadable, skipped"}
+    return "; ".join(f"{n} {labels.get(k, k)}" for k, n in sorted(counts.items()))
 
 
 def cmd_queue(args):
@@ -258,8 +336,11 @@ def _sha1(path):
 
 
 def _remove_staged(staging, source):
-    for folder in staged_folders(staging, source):
+    for folder, m in staged_folders(staging, source).items():
         shutil.rmtree(Path(staging) / folder, ignore_errors=True)
+        work = Path((m.get("con") or {}).get("work_dir", ""))
+        if m.get("con") and con_work_dir(staging).resolve() in work.resolve().parents:
+            shutil.rmtree(work.parent, ignore_errors=True)
 
 
 def commit(staging, folder):
@@ -269,6 +350,8 @@ def commit(staging, folder):
     m = stemsplit.read_manifest(staged)
     if not m or m.get("kind") != "split":
         raise ValueError("not a staged split")
+    if m.get("con"):
+        return _commit_con(staging, staged, m)
     song_dir = Path(m["source"])
     song_file = m.get("song_file", "song.ogg")
     song = song_dir / song_file
@@ -298,10 +381,7 @@ def commit(staging, folder):
         raise
     for name in new_files:
         os.replace(song_dir / (name + TMP_SUFFIX), song_dir / name)
-    variant = m.get("variant") or "plain split"
-    if not m.get("variant") and m.get("variant_of"):  # variants made before the label was stored
-        variant = m["song"][len(m["variant_of"]):].strip().strip("[]") or variant
-    record = {"committed": _now(), "variant": variant, "model": m.get("model"),
+    record = {"committed": _now(), "variant": _variant_label(m), "model": m.get("model"),
               "files": [n for n in new_files if n != song_file], "replaced": song_file, "backup": backup}
     (song_dir / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     with edit_state(staging) as state:
@@ -311,10 +391,95 @@ def commit(staging, folder):
     return record
 
 
+def _variant_label(m):
+    variant = m.get("variant") or "plain split"
+    if not m.get("variant") and m.get("variant_of"):  # variants made before the label was stored
+        variant = m["song"][len(m["variant_of"]):].strip().strip("[]") or variant
+    return variant
+
+
+def _commit_con(staging, staged, m):
+    """Create a song folder next to the CON from the staged split, then move the CON to the backup folder."""
+    info = m["con"]
+    con_path = Path(info["path"])
+    work = Path(info["work_dir"])
+    if not con_path.is_file():
+        raise ValueError(f"{con_path.name} no longer exists")
+    if _sha1(con_path) != info["sha1"]:
+        raise ValueError(f"{con_path.name} has changed since it was split; re-split it first")
+    target = con_path.parent / info["folder_name"]
+    if target.exists():
+        raise ValueError(f"a folder named \"{target.name}\" already exists next to the CON file")
+    building = target.with_name(target.name + TMP_SUFFIX)
+    shutil.rmtree(building, ignore_errors=True)
+    building.mkdir()
+    created = []
+    try:
+        for extra in ("notes.mid", "song.ini", "album.png"):
+            if (work / extra).exists():
+                shutil.copy2(work / extra, building / extra)
+                created.append(extra)
+        for p in sorted(staged.glob("*.ogg")):
+            if not p.name.startswith("original."):
+                shutil.copy2(p, building / p.name)
+                created.append(p.name)
+        backup_dir = con_backup_dir(staging) / hashlib.sha1(str(con_path).encode()).hexdigest()[:8]
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / con_path.name
+        shutil.move(str(con_path), str(backup))
+    except Exception:
+        shutil.rmtree(building, ignore_errors=True)
+        raise
+    try:
+        os.replace(building, target)
+    except Exception:
+        shutil.move(str(backup), str(con_path))
+        shutil.rmtree(building, ignore_errors=True)
+        raise
+    record = {"committed": _now(), "variant": _variant_label(m), "model": m.get("model"), "files": created,
+              "con": {"original": str(con_path), "backup": str(backup)}}
+    (target / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
+    with edit_state(staging) as state:
+        set_song(state, con_path, status="committed", staged=None, variant=record["variant"], files=created,
+                 flags=m.get("flags", []), folder=str(target), con_backup=str(backup))
+    _remove_staged(staging, con_path)
+    return record
+
+
+def _undo_con(staging, folder, record):
+    original, backup = Path(record["con"]["original"]), Path(record["con"]["backup"])
+    if original.exists():
+        raise ValueError(f"{original.name} already exists again in the library; not overwriting it")
+    if not backup.is_file():
+        raise ValueError(f"the backed-up CON file is missing: {backup}")
+    shutil.move(str(backup), str(original))
+    for name in record["files"]:
+        if Path(name).name == name:
+            (folder / name).unlink(missing_ok=True)
+    (folder / RECORD_NAME).unlink()
+    with contextlib.suppress(OSError):
+        folder.rmdir()  # only removed if nothing else was added to it since
+    with contextlib.suppress(OSError):
+        backup.parent.rmdir()
+    with edit_state(staging) as state:
+        set_song(state, original, status="pending", staged=None, variant=None, files=None, flags=[],
+                 folder=None, con_backup=None)
+    return record
+
+
 def undo(staging, source):
-    """Remove the files a commit added and restore the original song audio."""
+    """Remove the files a commit added and restore the original song audio (or CON file).
+
+    source: a song folder, or a CON file path that was converted."""
+    entry = load_state(staging)["songs"].get(str(source), {})
+    if entry.get("kind") == "con" and entry.get("folder"):
+        source = entry["folder"]
     song_dir = Path(source)
     record_path = song_dir / RECORD_NAME
+    if record_path.exists():
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        if record.get("con"):
+            return _undo_con(staging, song_dir, record)
     if not record_path.exists():
         raise ValueError(f"no commit to undo in {song_dir.name}")
     record = json.loads(record_path.read_text(encoding="utf-8"))

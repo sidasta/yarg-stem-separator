@@ -156,7 +156,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         truth=sorted(p.stem for p in (path / "truth").glob("*.ogg")),
                         raw=sorted(p.stem for p in (path / "raw").glob("*.ogg")))
             songs.append(data)
-        return {"songs": songs, "state": library.load_state(self.staging)["songs"],
+        state = library.load_state(self.staging)
+        con_counts = {}
+        for info in state.get("cons", {}).values():
+            con_counts[info["status"]] = con_counts.get(info["status"], 0) + 1
+        return {"songs": songs, "state": state["songs"],
+                "cons_text": library.describe_cons(con_counts) if con_counts else "",
+                "con_backups": str(library.con_backup_dir(self.staging)),
                 "has_settings": bool(library.load_settings(self.staging)["roots"]), "queue_running": QUEUE.running}
 
     # ------------------------------------------------------------ writes
@@ -191,8 +197,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json(list_dirs(body.get("path") or ""))
             if action == "scan":
                 s = library.load_settings(self.staging)
-                found, todo = library.scan(s["roots"], self.staging, s["retry_failed"])
-                return self.send_json({"found": found, "todo": len(todo)})
+                found, todo, cons = library.scan(s["roots"], self.staging, s["retry_failed"])
+                return self.send_json({"found": found, "todo": len(todo), "cons": cons,
+                                       "cons_text": library.describe_cons(cons) if cons else ""})
             if action == "queue/start":
                 QUEUE.start(self.staging, library.load_settings(self.staging))
                 return self.send_json({"ok": True})
