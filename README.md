@@ -35,12 +35,18 @@ Difficulties in `song.ini` are mapped from the CON's Rock Band difficulty rating
 
 ## Quick start
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (needed once, for setup).
-2. Double-click **`Start Stem Separator.bat`**. The first run sets up Python and the
+1. **Download:** [click here to download the latest version as a ZIP](https://github.com/sidasta/yarg-stem-separator/archive/refs/heads/main.zip)
+   (or, on this page, click the green **Code** button, then **Download ZIP**).
+   Right-click the ZIP, choose **Extract All…**, and put the folder somewhere
+   *outside* your YARG songs folder (e.g. `Documents`). Don't run it from inside the ZIP.
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) (needed once, for setup).
+3. Double-click **`Start Stem Separator.bat`** in the extracted folder. If Windows shows a
+   security warning (it does for any downloaded script), choose **Run**, or on a
+   "Windows protected your PC" screen click **More info**, then **Run anyway**. The first run sets up Python and the
    separation packages (a few GB, several minutes); after that it starts in seconds.
    Your browser opens at http://localhost:8765/. Keep the black window open while you
    use it; close it to stop. Running the .bat again while it's open just reopens the page.
-3. In **⚙ Library & splitting**, add your song folder (Browse… or paste a path), then
+4. In **⚙ Library & splitting**, add your song folder (Browse… or paste a path), then
    **Start splitting**. Progress shows on the page; you can review finished songs while
    it runs, and stop/start any time. It carries on where it left off, and later runs only
    pick up new songs. The separation model (~300 MB) downloads on the first split.
