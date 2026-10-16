@@ -9,6 +9,10 @@ lets you listen and choose, then writes the result into the song folder (undoabl
 - Only instruments charted in `song.ini` / `notes.mid` get a stem; the new `song.ogg`
   is everything else, so all files played together reproduce the original.
 - Nothing in your library changes until you press **Commit**.
+- It only works on audio you already have; it doesn't download songs or audio of any kind.
+- Needs Windows and an NVIDIA graphics card (the separation is done by an AI model).
+- Only songs whose audio is `song.ogg` are processed. YARG also supports `.opus` and
+  `.mp3` audio, but songs using those are skipped for now.
 
 ## Quick start
 
