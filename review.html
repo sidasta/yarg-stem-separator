@@ -67,13 +67,30 @@
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
   .loading { color: var(--muted); padding: 20px 0; }
   code { font-size: 12px; }
+  .navtop { width: 100%; margin: 6px 0 10px; }
+  .progress { height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  pre.log { background: var(--track); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow: auto; font-size: 12px;
+    white-space: pre-wrap; margin: 8px 0 0; }
+  .folders { list-style: none; padding: 0; margin: 0 0 8px; }
+  .folders li button { flex-shrink: 0; white-space: nowrap; }
+  .folders li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-all; }
+  input[type=text], select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  input[type=text] { flex: 1; min-width: 200px; }
+  .browser { border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; }
+  .browser .path { padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); word-break: break-all; }
+  .browser .list { max-height: 240px; overflow: auto; }
+  .browser .list button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--text); font: inherit;
+    padding: 5px 10px; cursor: pointer; }
+  .browser .list button:hover { background: var(--track); }
+  .browser .row { padding: 8px 10px; border-top: 1px solid var(--line); }
   @media (max-width: 860px) { .app { grid-template-columns: 1fr; } nav { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--line); }
     main { padding: 16px; } td.tl { display: none; } .grid2 { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <div class="app">
-  <nav><h1>Stem Review</h1><div class="summary" id="summary"></div><div id="songs"></div></nav>
+  <nav><h1>Stem Review</h1><div class="summary" id="summary"></div><button class="btn navtop" data-key="setup">⚙ Library &amp; splitting</button><div id="songs"></div></nav>
   <main id="main"><p class="loading">Loading…</p></main>
 </div>
 <script>
@@ -125,7 +142,9 @@ function renderNav() {
   const committed = by("committed"), skipped = by("skipped"), failed = by("failed"), pending = by("pending");
   const benches = lib.songs.filter(s => s.kind === "bench");
   reviewOrder = [...flagged, ...clean].map(e => `song:${e.source}`);
-  $("#summary").textContent = `${split.length} to review (${flagged.length} flagged) · ${committed.length} committed · ` +
+  queueRunning = lib.queue_running;
+  $("#summary").textContent = (queueRunning ? "Splitting in progress… · " : "") +
+    `${split.length} to review (${flagged.length} flagged) · ${committed.length} committed · ` +
     `${skipped.length} skipped · ${pending.length} waiting to split${failed.length ? ` · ${failed.length} failed` : ""}`;
 
   const songButtons = list => list.map(e => {
@@ -146,11 +165,24 @@ function renderNav() {
     section("Skipped", skipped.length, simple(skipped, () => ""), false) +
     section("Waiting to split", pending.length, pending.map(e => `<div class="plain">${esc(e.name)}</div>`).join(""), false) +
     section("Accuracy tests", benches.length, benches.map(b => navButton(`folder:${b.folder}`, `🧪 ${b.song}`, kept(b))).join(""), false) +
-    (entries.length || benches.length ? "" : `<p class="note">Nothing staged yet. Run the queue command (see README).</p>`);
+    (entries.length || benches.length ? "" : `<p class="note">Nothing here yet. Open “Library &amp; splitting” above to choose your song folder and start.</p>`);
   document.querySelectorAll("nav button[data-key]").forEach(b => {
     b.onclick = () => selectByKey(b.dataset.key);
     b.classList.toggle("active", b.dataset.key === curKey);
   });
+  updateReadyButton();
+}
+
+function readyCount() {
+  return Object.values(lib.state).filter(e => e.status === "split" && !(e.flags || []).length && e.staged).length;
+}
+
+function updateReadyButton() {
+  const b = $("#commit-ready");
+  if (!b) return;
+  const n = readyCount();
+  b.textContent = `Commit all ${n} unflagged song${n === 1 ? "" : "s"}`;
+  b.disabled = !n;
 }
 
 function kept(s) { return s ? esc(Object.values(s.stems).filter(e => e.kept && e.file !== "song").map(e => e.file).join(", ")) : ""; }
@@ -159,6 +191,11 @@ function navButton(key, title, sub, cls = "") {
 }
 
 function selectByKey(key) {
+  if (key === "setup") {
+    stop(); cur = null; curKey = key;
+    document.querySelectorAll("nav button[data-key]").forEach(b => b.classList.toggle("active", b.dataset.key === key));
+    return renderSetup();
+  }
   if (!key) { stop(); curKey = null; cur = null; $("#main").innerHTML = `<p class="loading">Pick a song on the left.</p>`; return renderNav(); }
   curKey = key;
   document.querySelectorAll("nav button[data-key]").forEach(b => b.classList.toggle("active", b.dataset.key === key));
@@ -340,7 +377,7 @@ function wireDecisions(s) {
     try {
       stop();
       await api(action, body);
-      await refresh(next);
+      await refresh(next || "setup");
     } catch (err) {
       msg("#decide-msg", err.message, true);
       document.querySelectorAll("#commit, #skip, #build").forEach(b => b.disabled = false);
@@ -467,7 +504,164 @@ document.addEventListener("keydown", e => {
 document.addEventListener("keyup", e => { if (e.key === "m" || e.key === "M") { missHeld = false; update(); } });
 addEventListener("resize", () => cur && drawTimelines());
 
-refresh().then(() => selectByKey(reviewOrder[0] || null));
+// ------------------------------------------------------------------ library & splitting
+let setup = null, browserPath = null, queueRunning = false, lastDone = -1;
+
+async function renderSetup() {
+  setup = await (await fetch("/api/settings")).json();
+  if (curKey !== "setup") return;
+  const st = setup.settings;
+  $("#main").innerHTML = `
+    <h2>Library &amp; splitting</h2>
+    <div class="meta">Choose where your songs are, then start splitting. Songs that already have separate instrument files are left alone.</div>
+    <div class="card">
+      <h3>Song library folders</h3>
+      ${st.roots.length ? `<ul class="folders">${st.roots.map((r, i) => `<li><span>${esc(r)}</span>
+        <button class="btn small" data-remove="${i}">Remove</button></li>`).join("")}</ul>`
+        : `<p class="note">No folder chosen yet. Browse to the folder that holds your songs (subfolders are searched too).</p>`}
+      <div class="row"><input type="text" id="root-input" placeholder="Paste a folder path, e.g. D:\\Games\\YARG">
+        <button class="btn" id="root-add">Add</button><button class="btn" id="root-browse">Browse…</button></div>
+      <div id="browser"></div>
+      <div class="status-msg" id="root-msg"></div>
+    </div>
+    <div class="card">
+      <h3>Options</h3>
+      <div class="row" style="margin-bottom:8px"><label for="model">Model</label>
+        <select id="model">${Object.entries(setup.models).map(([k, v]) => `<option value="${esc(k)}" ${k === st.model ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></div>
+      <label class="opt"><input type="checkbox" id="auto-variants" ${st.auto_variants ? "checked" : ""}>
+        For flagged songs, also prepare a “fill from other + gated song” variant to compare</label><br>
+      <label class="opt"><input type="checkbox" id="retry-failed" ${st.retry_failed ? "checked" : ""}> Retry songs that failed before</label>
+    </div>
+    <div class="card">
+      <h3>Splitting</h3>
+      <div class="row">
+        <button class="btn" id="scan">Check for new songs</button>
+        <button class="btn primary" id="q-start">Start splitting</button>
+        <button class="btn" id="q-stop">Stop after this song</button>
+      </div>
+      <div class="status-msg" id="scan-msg"></div>
+      <div id="q-status"></div>
+      <p class="note">Takes about 40–60 seconds per song on your GPU. You can review songs while it runs, close the page, or stop and start again later; it carries on where it left off.</p>
+    </div>
+    <div class="card">
+      <h3>Shortcuts</h3>
+      <button class="btn" id="commit-ready"></button>
+      <p class="note">Commits the plain split of every song in “Ready to review” in one go (flagged songs are left for you to check).
+        Each can still be undone individually. Rescan songs in YARG afterwards.</p>
+      <div class="status-msg" id="ready-msg"></div>
+    </div>`;
+  const msg = (id, text, err) => { const m = $(id); m.textContent = text; m.className = `status-msg${err ? " err" : ""}`; };
+  const save = async body => {
+    try { setup.settings = (await api("settings", body)).settings; return true; }
+    catch (err) { msg("#root-msg", err.message, true); return false; }
+  };
+  document.querySelectorAll("[data-remove]").forEach(b => b.onclick = async () => {
+    if (await save({ roots: st.roots.filter((_, i) => i !== +b.dataset.remove) })) renderSetup();
+  });
+  const addRoot = async path => { if (path && await save({ roots: [...st.roots, path] })) renderSetup(); };
+  $("#root-add").onclick = () => addRoot($("#root-input").value.trim());
+  $("#root-input").onkeydown = e => { if (e.key === "Enter") addRoot(e.target.value.trim()); };
+  $("#root-browse").onclick = () => showBrowser(browserPath ?? (st.roots[0] || ""), addRoot);
+  $("#model").onchange = e => save({ model: e.target.value });
+  $("#auto-variants").onchange = e => save({ auto_variants: e.target.checked });
+  $("#retry-failed").onchange = e => save({ retry_failed: e.target.checked });
+  $("#scan").onclick = async () => {
+    msg("#scan-msg", "Looking through your folders…");
+    try {
+      const r = await api("scan", {});
+      msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song.ogg; ${r.todo} still to split` +
+        (r.todo ? ` (about ${Math.max(1, Math.round(r.todo * 0.75))} min).` : "."));
+      refresh();
+    } catch (err) { msg("#scan-msg", err.message, true); }
+  };
+  $("#q-start").onclick = async () => {
+    try { await api("queue/start", {}); queueRunning = true; pollQueue(); }
+    catch (err) { msg("#scan-msg", err.message, true); }
+  };
+  $("#q-stop").onclick = async () => { await api("queue/stop", {}); pollQueue(); };
+  $("#commit-ready").onclick = async () => {
+    const ready = readyCount();
+    if (!ready || !confirm(`Commit the plain split of ${ready} unflagged song${ready === 1 ? "" : "s"} to your library?`)) return;
+    $("#commit-ready").disabled = true;
+    try {
+      const r = await api("commit-ready", {});
+      await refresh();
+      if (curKey === "setup") {
+        await renderSetup();
+        msg("#ready-msg", `Committed ${r.committed.length}.` + (r.errors.length ? ` Not committed: ${r.errors.join("; ")}` : " Rescan songs in YARG to pick them up."),
+            r.errors.length > 0);
+      }
+    } catch (err) { msg("#ready-msg", err.message, true); $("#commit-ready").disabled = false; }
+  };
+  updateReadyButton();
+  renderQueue(setup.queue);
+  if (setup.queue.running) pollQueue();
+}
+
+async function showBrowser(path, onPick) {
+  const box = $("#browser");
+  if (!box) return;
+  try {
+    const d = await api("dirs", { path });
+    browserPath = d.path;
+    box.innerHTML = `<div class="browser">
+      <div class="path">${d.path ? esc(d.path) : "This PC"}${d.is_song ? " · this looks like a single song folder; pick the folder above it" : ""}</div>
+      <div class="list">
+        ${d.path ? `<button data-dir="${esc(d.parent)}">⬆ Up</button>` : ""}
+        ${d.dirs.map(x => `<button data-dir="${esc(x.path)}">📁 ${esc(x.name)}</button>`).join("") || `<div class="note" style="padding:6px 10px">No subfolders</div>`}
+      </div>
+      <div class="row">${d.path ? `<button class="btn primary small" id="use-dir">Use this folder</button>` : ""}
+        <button class="btn small" id="close-browser">Cancel</button></div></div>`;
+    box.querySelectorAll("[data-dir]").forEach(b => b.onclick = () => showBrowser(b.dataset.dir, onPick));
+    const use = $("#use-dir"); if (use) use.onclick = () => onPick(d.path);
+    $("#close-browser").onclick = () => { box.innerHTML = ""; };
+  } catch (err) {
+    box.innerHTML = `<div class="status-msg err">${esc(err.message)}</div>`;
+    if (path) setTimeout(() => showBrowser("", onPick), 1200);
+  }
+}
+
+function renderQueue(q) {
+  const box = $("#q-status");
+  if (!box) return;
+  const s = q.stats || {};
+  const finished = (s.done || 0) + (s.failed || 0);
+  const pct = s.total ? Math.round(finished / s.total * 100) : 0;
+  box.innerHTML = (q.running || (q.log || []).length) ? `
+    ${q.running ? `<div class="progress"><div style="width:${pct}%"></div></div>
+      <div>${q.stopping ? "Stopping after this song… " : ""}${s.current ? `Splitting <b>${esc(s.current)}</b>` : "Starting…"}
+        ${s.total ? ` · ${finished} of ${s.total} done` : ""}${s.eta_min != null ? ` · about ${s.eta_min} min left` : ""}</div>` : ""}
+    <pre class="log">${esc((q.log || []).join("\n"))}</pre>` : "";
+  const log = box.querySelector("pre.log"); if (log) log.scrollTop = log.scrollHeight;
+  $("#q-start").disabled = q.running;
+  $("#q-stop").disabled = !q.running || q.stopping;
+}
+
+let polling = false;
+async function pollQueue() {
+  if (polling) return;
+  polling = true;
+  try {
+    while (true) {
+      const q = await (await fetch("/api/queue")).json();
+      renderQueue(q);
+      const finished = (q.stats?.done || 0) + (q.stats?.failed || 0);
+      if (finished !== lastDone || q.running !== queueRunning) {   // songs finished: refresh the list
+        lastDone = finished; await refresh();
+        renderQueue(q);
+      }
+      if (!q.running) break;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } finally { polling = false; }
+}
+
+refresh().then(() => {
+  if (!lib.has_settings && !reviewOrder.length) return selectByKey("setup");
+  selectByKey(reviewOrder[0] || "setup");
+  if (lib.queue_running) pollQueue();
+});
+
 </script>
 </body>
 </html>

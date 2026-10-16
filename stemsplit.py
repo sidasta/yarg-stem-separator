@@ -372,6 +372,9 @@ def assemble(mix, sr, stems, charted, spans, fill=(), gate_song_db=None):
 
 # Below this share of charted time being audible, a stem is flagged for a closer listen.
 FLAG_COVERAGE = 0.5
+# Order in which "fill from other" assigns overlapping charted sections (first wins).
+FILL_ORDER = ["guitar", "piano", "bass", "vocals", "drums"]
+FILL_LABEL = {"guitar": "guitar", "piano": "keys", "bass": "bass", "vocals": "vocals", "drums": "drums"}
 
 
 def attention(report, charted):
@@ -578,6 +581,8 @@ def main():
     p.add_argument("--staging", default=str(STAGING_DIR))
     p.add_argument("--retry-failed", action="store_true", help="also retry songs that failed before")
     p.add_argument("--limit", type=int, default=0, help="stop after this many songs")
+    p.add_argument("--no-variants", action="store_true",
+                   help="don't prepare a fill+gate variant for flagged songs")
     p = sub.add_parser("undo", help="undo a commit: remove added stems, restore song.ogg")
     p.add_argument("songs", nargs="+", help="song folder(s)")
     p.add_argument("--staging", default=str(STAGING_DIR))

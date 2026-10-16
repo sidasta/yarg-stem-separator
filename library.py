@@ -124,50 +124,126 @@ def find_songs(roots):
                 yield song_dir
 
 
+# ---------------------------------------------------------------- settings
+
+DEFAULT_SETTINGS = {"roots": [], "model": stemsplit.DEFAULT_MODEL, "auto_variants": True, "retry_failed": False}
+
+
+def load_settings(staging):
+    try:
+        saved = json.loads((Path(staging) / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    return {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
+
+
+def save_settings(staging, settings):
+    path = Path(staging) / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(settings, indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 # ---------------------------------------------------------------- queue
 
-def cmd_queue(args):
-    staging = Path(args.staging)
+def scan(roots, staging, retry_failed=False):
+    """Register newly found songs as pending. Returns (found count, list of song folders to split)."""
     sync_staged(staging)
-    found = list(find_songs(args.roots))
+    found = list(find_songs(roots))
     with edit_state(staging) as state:
         for song_dir in found:
             if str(song_dir) not in state["songs"]:
                 set_song(state, song_dir, status="pending")
         todo = [Path(s) for s, e in state["songs"].items()
-                if e["status"] == "pending" or (args.retry_failed and e["status"] == "failed")]
-    todo = [s for s in todo if (s / "song.ogg").exists()]
-    if args.limit:
-        todo = todo[:args.limit]
-    print(f"Found {len(found)} single-file songs; {len(todo)} to split now. "
-          f"Safe to stop with Ctrl+C and run again later.", flush=True)
-    done = flagged = failed = 0
+                if e["status"] == "pending" or (retry_failed and e["status"] == "failed")]
+    return len(found), [s for s in todo if (s / "song.ogg").exists()]
+
+
+def suggested_fill(report):
+    """Charted stems the model mostly missed, in fill priority order."""
+    low = {stem for stem, e in report["stems"].items()
+           if report["charted"].get(stem) and e.get("chart_coverage") is not None
+           and e["chart_coverage"] < stemsplit.FLAG_COVERAGE}
+    return [s for s in stemsplit.FILL_ORDER if s in low]
+
+
+def run_queue(roots, staging, model=stemsplit.DEFAULT_MODEL, retry_failed=False, limit=0, auto_variants=True,
+              log=print, progress=None, should_stop=lambda: False):
+    """Split every pending song under roots. Safe to interrupt; re-running carries on.
+
+    auto_variants: for flagged songs, also build a "fill from other + gated song" variant.
+    progress(dict) is called before each song and at the end; should_stop() is checked between songs.
+    """
+    staging = Path(staging)
+    found, todo = scan(roots, staging, retry_failed)
+    if limit:
+        todo = todo[:limit]
+    log(f"Found {found} single-file songs; {len(todo)} to split now.")
+    stats = {"total": len(todo), "done": 0, "flagged": 0, "failed": 0, "current": None, "eta_min": None}
     t0 = time.time()
-    try:
-        for i, song_dir in enumerate(todo, 1):
-            eta = ""
-            if done:
-                eta = f", ~{(time.time() - t0) / done * (len(todo) - i + 1) / 60:.0f} min left"
-            print(f"[{i}/{len(todo)}{eta}] {song_dir.name}", flush=True)
-            try:
-                folder, report = stemsplit.split_song(song_dir, args.model, staging)
-            except Exception as e:  # keep going; the song is marked failed with the reason
-                failed += 1
-                print(f"   FAILED: {e}", flush=True)
-                with edit_state(staging) as state:
-                    set_song(state, song_dir, status="failed", error=f"{type(e).__name__}: {e}")
-                continue
-            done += 1
-            kept = [e["file"] for e in report["stems"].values() if e.get("kept") and e["file"] != "song"]
-            print(f"   {report['seconds']}s, stems: {', '.join(kept) or 'none'}", flush=True)
-            for flag in report["flags"]:
-                print(f"   ! {flag}", flush=True)
-            flagged += bool(report["flags"])
+    for i, song_dir in enumerate(todo, 1):
+        if should_stop():
+            log("Stopped. Start again any time to carry on where it left off.")
+            break
+        if stats["done"] + stats["failed"]:
+            per_song = (time.time() - t0) / (stats["done"] + stats["failed"])
+            stats["eta_min"] = round(per_song * (len(todo) - i + 1) / 60)
+        stats["current"] = song_dir.name
+        if progress:
+            progress(dict(stats))
+        eta = f", ~{stats['eta_min']} min left" if stats["eta_min"] is not None else ""
+        log(f"[{i}/{len(todo)}{eta}] {song_dir.name}")
+        try:
+            folder, report = stemsplit.split_song(song_dir, model, staging)
+        except Exception as e:  # keep going; the song is marked failed with the reason
+            stats["failed"] += 1
+            log(f"   FAILED: {e}")
             with edit_state(staging) as state:
-                set_song(state, song_dir, status="split", staged=folder, flags=report["flags"], error=None)
+                set_song(state, song_dir, status="failed", error=f"{type(e).__name__}: {e}")
+            continue
+        stats["done"] += 1
+        kept = [e["file"] for e in report["stems"].values() if e.get("kept") and e["file"] != "song"]
+        log(f"   {report['seconds']}s, stems: {', '.join(kept) or 'none'}")
+        for flag in report["flags"]:
+            log(f"   ! {flag}")
+        stats["flagged"] += bool(report["flags"])
+        with edit_state(staging) as state:
+            set_song(state, song_dir, status="split", staged=folder, flags=report["flags"], error=None)
+        fill = suggested_fill(report) if auto_variants and report["flags"] else []
+        if fill:
+            try:
+                stemsplit.remix(staging / folder, fill, -15.0)
+                log(f"   prepared variant: {'+'.join(stemsplit.FILL_LABEL[s] for s in fill)} from other, song gated")
+            except Exception as e:
+                log(f"   (could not prepare variant: {e})")
+    stats["current"] = None
+    if progress:
+        progress(dict(stats))
+    log(f"Split {stats['done']} songs ({stats['flagged']} flagged for a closer listen), {stats['failed']} failed.")
+    return stats
+
+
+def cmd_queue(args):
+    try:
+        run_queue(args.roots, args.staging, args.model, args.retry_failed, args.limit,
+                  auto_variants=not args.no_variants, log=lambda m: print(m, flush=True))
     except KeyboardInterrupt:
         print("\nStopped. Run the same command again to carry on where it left off.")
-    print(f"Split {done} songs ({flagged} flagged for a closer listen), {failed} failed.")
+
+
+def commit_ready(staging):
+    """Commit the plain split of every unflagged song waiting for review. Returns (committed, errors)."""
+    committed, errors = [], []
+    for source, e in list(load_state(staging)["songs"].items()):
+        if e.get("status") != "split" or e.get("flags") or not e.get("staged"):
+            continue
+        try:
+            commit(staging, e["staged"])
+            committed.append(e["name"])
+        except (ValueError, OSError) as err:
+            errors.append(f"{e['name']}: {err}")
+    return committed, errors
 
 
 # ---------------------------------------------------------------- commit / skip / undo
