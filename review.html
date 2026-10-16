@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stem Review</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+    --accent: #3b6fd8; --accent-text: #ffffff; --keep: #2f8a4c; --skip: #9a9a93; --warn: #c2571a; --danger: #b8322a;
+    --chart: #8a6fd8; --audio: #2f8a4c; --track: #ecebe6; --warn-bg: #fbefe6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #20201e; --text: #ecebe6; --muted: #9b9a93; --line: #34332f;
+      --accent: #6d97ee; --accent-text: #0f0f0e; --keep: #5bbf7a; --skip: #77766f; --warn: #ec8b52; --danger: #ef6b62;
+      --chart: #a68cf0; --audio: #5bbf7a; --track: #2b2a27; --warn-bg: #3a2a1f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .app { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+  nav { border-right: 1px solid var(--line); padding: 16px; background: var(--panel); overflow-y: auto; max-height: 100vh; position: sticky; top: 0; }
+  nav h1 { font-size: 15px; margin: 0 0 4px; }
+  .summary { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  details { margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 4px 0; }
+  nav button { display: block; width: 100%; text-align: left; padding: 7px 10px; margin: 2px 0; border: 1px solid transparent;
+    border-radius: 6px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  nav button:hover { border-color: var(--line); }
+  nav button.active { background: var(--accent); color: var(--accent-text); }
+  nav button.variant { margin-left: 14px; width: calc(100% - 14px); }
+  nav small { display: block; opacity: .8; font-size: 12px; }
+  nav .plain { color: var(--muted); font-size: 12px; padding: 2px 10px; }
+  main { padding: 20px 24px; max-width: 1100px; }
+  h2 { margin: 0 0 4px; font-size: 20px; }
+  h3 { margin: 0 0 8px; font-size: 14px; }
+  .meta { color: var(--muted); margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .flags { background: var(--warn-bg); border-color: var(--warn); }
+  .flags ul { margin: 4px 0 0; padding-left: 18px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .transport input[type=range] { flex: 1; min-width: 160px; }
+  .btn { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font: inherit; cursor: pointer; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn.primary, .btn.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .btn.danger { color: var(--danger); border-color: var(--danger); }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 92px; }
+  .modes { margin-bottom: 12px; }
+  .hint, .note { color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  label.opt { display: inline-flex; gap: 6px; align-items: center; margin-right: 14px; cursor: pointer; }
+  .status-msg { font-size: 13px; margin-top: 8px; }
+  .status-msg.err { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  td.name b { display: block; }
+  td small { color: var(--muted); }
+  td.tl { width: 34%; min-width: 200px; }
+  canvas.tl { width: 100%; height: 30px; display: block; cursor: pointer; border-radius: 3px; }
+  .tag { font-size: 12px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; }
+  .keep { color: var(--keep); } .skip { color: var(--skip); } .warn, small.warn { color: var(--warn); }
+  .small { padding: 4px 9px; font-size: 12px; }
+  .skipped td { color: var(--skip); }
+  .legend { color: var(--muted); font-size: 12px; margin: 6px 0 16px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
+  .loading { color: var(--muted); padding: 20px 0; }
+  code { font-size: 12px; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; } nav { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--line); }
+    main { padding: 16px; } td.tl { display: none; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav><h1>Stem Review</h1><div class="summary" id="summary"></div><div id="songs"></div></nav>
+  <main id="main"><p class="loading">Loading…</p></main>
+</div>
+<script>
+const ORDER = ["vocals", "guitar", "rhythm", "drums", "keys", "song"];
+const LABELS = { vocals: "Vocals", guitar: "Guitar", rhythm: "Rhythm / bass", drums: "Drums", keys: "Keys", song: "Song (everything else)" };
+const STEM_OF = { vocals: "vocals", guitar: "guitar", rhythm: "bass", drums: "drums", keys: "piano", song: "other" };
+const FILE_OF = Object.fromEntries(Object.entries(STEM_OF).map(([f, s]) => [s, f]));
+const RAW_ORDER = ["vocals", "guitar", "bass", "drums", "piano", "other"];
+const FILL_ORDER = ["guitar", "piano", "bass", "vocals", "drums"];  // priority where charted sections overlap
+const FILL_LABEL = { guitar: "Guitar", piano: "Keys", bass: "Bass", vocals: "Vocals", drums: "Drums" };
+
+let ctx, lib = { songs: [], state: {} }, cur = null, curKey = null, reviewOrder = [];
+let buffers = {}, sources = [], gains = {}, duration = 0, startedAt = 0, offset = 0, playing = false;
+let mode = "split", mute = {}, solo = {}, vol = {}, missHeld = false;
+
+const $ = (s, el = document) => el.querySelector(s);
+const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const url = (folder, path) => `/${encodeURIComponent(folder)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+async function api(action, body) {
+  const r = await fetch(`/api/${action}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Stem-Review": "1" },
+    body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+// ------------------------------------------------------------------ navigation
+async function refresh(selectKey) {
+  lib = await (await fetch("/api/library")).json();
+  for (const s of lib.songs) { s.raw = s.raw || []; s.truth = s.truth || []; }
+  renderNav();
+  if (selectKey !== undefined) selectByKey(selectKey);
+}
+
+function groupsFor(source) {
+  const all = lib.songs.filter(s => s.kind === "split" && s.source === source);
+  const base = all.find(s => !s.variant_of);
+  return { base, variants: all.filter(s => s.variant_of).sort((a, b) => a.folder.localeCompare(b.folder)) };
+}
+
+function renderNav() {
+  const entries = Object.entries(lib.state).map(([source, e]) => ({ source, ...e }));
+  const by = st => entries.filter(e => e.status === st).sort((a, b) => a.name.localeCompare(b.name));
+  const split = by("split").filter(e => groupsFor(e.source).base);
+  const flagged = split.filter(e => (e.flags || []).length), clean = split.filter(e => !(e.flags || []).length);
+  const committed = by("committed"), skipped = by("skipped"), failed = by("failed"), pending = by("pending");
+  const benches = lib.songs.filter(s => s.kind === "bench");
+  reviewOrder = [...flagged, ...clean].map(e => `song:${e.source}`);
+  $("#summary").textContent = `${split.length} to review (${flagged.length} flagged) · ${committed.length} committed · ` +
+    `${skipped.length} skipped · ${pending.length} waiting to split${failed.length ? ` · ${failed.length} failed` : ""}`;
+
+  const songButtons = list => list.map(e => {
+    const { base, variants } = groupsFor(e.source);
+    const flags = e.flags || [];
+    let html = navButton(`song:${e.source}`, e.name, flags.length ? `<span class="warn">⚠ ${esc(flags.join("; "))}</span>` : kept(base));
+    for (const v of variants) html += navButton(`folder:${v.folder}`, `[${v.variant || v.song.slice(v.variant_of.length).trim().replace(/^\[|\]$/g, "")}]`,
+      (v.flags || []).length ? `<span class="warn">⚠ ${v.flags.length} flag${v.flags.length > 1 ? "s" : ""}</span>` : kept(v), "variant");
+    return html;
+  }).join("");
+  const simple = (list, sub) => list.map(e => navButton(`song:${e.source}`, e.name, sub(e))).join("");
+  const section = (title, count, body, open = true) => count ? `<details ${open ? "open" : ""}><summary>${title} (${count})</summary>${body}</details>` : "";
+  $("#songs").innerHTML =
+    section("Needs a closer listen", flagged.length, songButtons(flagged)) +
+    section("Ready to review", clean.length, songButtons(clean)) +
+    section("Failed", failed.length, simple(failed, e => `<span class="warn">${esc(e.error || "")}</span>`)) +
+    section("Committed", committed.length, simple(committed, e => esc(e.variant || "")), false) +
+    section("Skipped", skipped.length, simple(skipped, () => ""), false) +
+    section("Waiting to split", pending.length, pending.map(e => `<div class="plain">${esc(e.name)}</div>`).join(""), false) +
+    section("Accuracy tests", benches.length, benches.map(b => navButton(`folder:${b.folder}`, `🧪 ${b.song}`, kept(b))).join(""), false) +
+    (entries.length || benches.length ? "" : `<p class="note">Nothing staged yet. Run the queue command (see README).</p>`);
+  document.querySelectorAll("nav button[data-key]").forEach(b => {
+    b.onclick = () => selectByKey(b.dataset.key);
+    b.classList.toggle("active", b.dataset.key === curKey);
+  });
+}
+
+function kept(s) { return s ? esc(Object.values(s.stems).filter(e => e.kept && e.file !== "song").map(e => e.file).join(", ")) : ""; }
+function navButton(key, title, sub, cls = "") {
+  return `<button data-key="${esc(key)}" class="${cls}">${esc(title)}<small>${sub}</small></button>`;
+}
+
+function selectByKey(key) {
+  if (!key) { stop(); curKey = null; cur = null; $("#main").innerHTML = `<p class="loading">Pick a song on the left.</p>`; return renderNav(); }
+  curKey = key;
+  document.querySelectorAll("nav button[data-key]").forEach(b => b.classList.toggle("active", b.dataset.key === key));
+  if (key.startsWith("folder:")) {
+    const s = lib.songs.find(x => x.folder === key.slice(7));
+    return s ? loadStaged(s) : selectByKey(null);
+  }
+  const source = key.slice(5), entry = lib.state[source];
+  if (!entry) return selectByKey(null);
+  if (entry.status === "split") {
+    const { base } = groupsFor(source);
+    return base ? loadStaged(base) : selectByKey(null);
+  }
+  stop(); cur = null;
+  renderEntry(source, entry);
+}
+
+function nextToReview() {
+  const i = reviewOrder.indexOf(curKey);
+  const rest = reviewOrder.filter(k => k !== curKey);
+  return rest.length ? (reviewOrder[i + 1] && reviewOrder[i + 1] !== curKey ? reviewOrder[i + 1] : rest[0]) : null;
+}
+
+// ------------------------------------------------------------------ committed / skipped / failed
+function renderEntry(source, e) {
+  const actions = {
+    committed: `<p>Committed <b>${esc(e.variant || "")}</b> on ${esc((e.updated || "").replace("T", " "))}. Added:
+      <code>${esc((e.files || []).join(", "))}</code>; the original is kept as <code>song.ogg.orig</code>.</p>
+      <button class="btn danger" id="act">Undo commit</button>
+      <p class="note">Undo deletes the added stem files, restores the original song.ogg, and puts the song back in the queue to be split again.</p>`,
+    skipped: `<p>Skipped. The song folder was not changed.</p><button class="btn" id="act">Un-skip (split again on the next queue run)</button>`,
+    failed: `<p class="warn">Splitting failed: ${esc(e.error || "")}</p><button class="btn" id="act">Retry on the next queue run</button>`,
+    pending: `<p>Waiting to be split. Run the queue command to process it.</p>`,
+  };
+  $("#main").innerHTML = `<h2>${esc(e.name)}</h2><div class="meta">${esc(source)}</div><div class="card">${actions[e.status] || ""}
+    <div class="status-msg" id="msg"></div></div>`;
+  const act = $("#act");
+  if (!act) return;
+  act.onclick = async () => {
+    if (e.status === "committed" && !confirm(`Undo the commit for "${e.name}"?`)) return;
+    act.disabled = true;
+    try {
+      await api(e.status === "committed" ? "undo" : "requeue", { source });
+      await refresh(`song:${source}`);
+    } catch (err) { $("#msg").textContent = err.message; $("#msg").className = "status-msg err"; act.disabled = false; }
+  };
+}
+
+// ------------------------------------------------------------------ staged song
+async function fetchBuffers(song, list) {
+  await Promise.all(list.map(async ([key, path, folder]) => {
+    if (buffers[key]) return;
+    const data = await (await fetch(url(folder || song.folder, path))).arrayBuffer();
+    const buf = await ctx.decodeAudioData(data);
+    if (cur === song) buffers[key] = buf;
+  }));
+}
+
+async function loadStaged(song) {
+  stop();
+  ctx = ctx || new AudioContext();
+  cur = song; buffers = {}; offset = 0; mode = "split"; mute = {}; solo = {}; vol = {};
+  $("#main").innerHTML = `<h2>${esc(song.song)}</h2><p class="loading">Loading audio…</p>`;
+  const wanted = [["original", "original.ogg"]];
+  for (const f of song.files) if (f !== "original") wanted.push([`split/${f}`, `${f}.ogg`]);
+  for (const f of song.truth) wanted.push([`truth/${f}`, `truth/${f}.ogg`]);
+  await fetchBuffers(song, wanted);
+  if (cur !== song) return;
+  duration = Math.max(...Object.values(buffers).map(b => b.duration));
+  render();
+}
+
+function coverageText(e) {
+  if (e.chart_coverage == null) return "";
+  const pct = Math.round(e.chart_coverage * 100);
+  return `<br><small class="${pct < 50 ? "warn" : ""}">audible in ${pct}% of charted time</small>`;
+}
+
+function trackRow(name, label, statusHtml, info, group, chart, act) {
+  const id = group === "raw" ? `raw:${name}` : name;
+  return `<tr><td class="name"><b>${label}</b>${info}</td><td>${statusHtml}</td>
+    <td><button class="btn small" data-mute="${id}">Mute</button> <button class="btn small" data-solo="${id}">Solo</button></td>
+    <td><input type="range" min="0" max="150" value="100" data-vol="${id}" aria-label="${label} volume" style="width:90px"></td>
+    <td class="tl"><canvas class="tl" data-chart='${JSON.stringify(chart || [])}' data-act='${JSON.stringify(act || [])}'></canvas></td></tr>`;
+}
+
+function render() {
+  const s = cur, isBench = s.kind === "bench";
+  const act = s.activity || {}, chart = s.chart || {};
+  const rows = ORDER.map(name => {
+    const e = s.stems[STEM_OF[name]] || {};
+    const present = s.files.includes(name);
+    const sdr = s.sdr_db && s.sdr_db[name] !== undefined ? `<br><small>accuracy ${s.sdr_db[name]} dB</small>` : "";
+    const status = present ? `<span class="tag keep">${name === "song" ? "residual" : "split out"}</span>${sdr}${coverageText(e)}`
+                           : `<span class="tag skip">not split</span>${coverageText(e)}`;
+    const info = e.reason ? `<small>${esc(e.reason)}</small>` : (e.level_db !== undefined ? `<small>level ${e.level_db} dB vs mix</small>` : "");
+    if (!present && !s.truth.includes(name)) {
+      return `<tr class="skipped"><td class="name"><b>${LABELS[name]}</b>${info}</td><td>${status}</td><td colspan="2"></td>
+        <td class="tl"><canvas class="tl" data-chart='${JSON.stringify(chart[name] || [])}' data-act='[]'></canvas></td></tr>`;
+    }
+    return trackRow(name, LABELS[name], status, info, "split", chart[name], act[name]);
+  }).join("");
+  const rawRows = RAW_ORDER.filter(n => s.raw.includes(n)).map(n =>
+    trackRow(n, n === "other" ? "other (unclassified)" : n, "", "", "raw", chart[FILE_OF[n]], act[`raw/${n}`])).join("");
+  const hasGuitar = s.files.includes("guitar");
+  const flags = s.flags || [];
+  const fillable = FILL_ORDER.filter(st => s.charted && s.charted[st] && s.raw.includes("other"));
+  const added = s.files.filter(f => !["original", "song"].includes(f));
+  const songFolder = (s.source || "").split(/[\\/]/).pop();
+
+  $("#main").innerHTML = `
+    <h2>${esc(s.song)}</h2>
+    <div class="meta">${esc(s.model)} · split in ${s.seconds}s${isBench ? " · accuracy test: mix of the song's real stems" : ""}</div>
+    ${flags.length ? `<div class="card flags"><b>Worth a closer listen</b><ul>${flags.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
+      <div class="note">Try a variant below: “fill from other” gives an instrument the model's unclassified audio while it is charted.</div></div>` : ""}
+    <div class="card transport row">
+      <button class="btn primary" id="play">Play</button>
+      <span class="time" id="time">0:00 / ${fmt(duration)}</span>
+      <input type="range" id="seek" min="0" max="${duration}" step="0.1" value="0" aria-label="Seek">
+    </div>
+    <div class="modes row">
+      <button class="btn" data-mode="split">Split stems</button>
+      <button class="btn" data-mode="original">Original</button>
+      ${isBench ? `<button class="btn" data-mode="truth">Real stems</button>` : ""}
+      ${s.raw.length ? `<button class="btn" data-mode="raw">Raw model outputs</button>` : ""}
+      ${hasGuitar ? `<button class="btn" id="miss" title="Hold to mute the guitar like a missed note">Hold: miss guitar</button>` : ""}
+      <span class="hint">Space play/pause · A split/original · M (hold) miss guitar · click a timeline to jump</span>
+    </div>
+    <table><thead><tr><th>Track</th><th>Status</th><th></th><th>Volume</th><th>Chart notes vs audio</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="legend">Timeline:<i style="background:var(--chart)"></i>charted notes<i style="background:var(--audio)"></i>audio in this track (brighter = louder)</p>
+    ${isBench ? "" : `<div class="grid2">
+      <div class="card">
+        <h3>Decide</h3>
+        <div class="row"><button class="btn primary" id="commit">Commit this version</button><button class="btn" id="skip">Skip song</button></div>
+        <p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces song.ogg, keeping the original as
+          song.ogg.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>
+        <div class="status-msg" id="decide-msg"></div>
+      </div>
+      <div class="card">
+        <h3>Make a variant</h3>
+        ${fillable.length ? `<div class="note">Fill from the model's “other” output while charted:</div>
+        <div style="margin:4px 0 8px">${fillable.map(st => `<label class="opt"><input type="checkbox" data-fill="${st}">${FILL_LABEL[st]}</label>`).join("")}</div>
+        <div class="note" style="margin-bottom:8px">Where charted sections overlap, the first ticked instrument in this order wins.</div>` : ""}
+        <label class="opt"><input type="checkbox" id="gate"> Gate song.ogg</label>
+        <input type="range" id="gate-db" min="-30" max="-5" step="1" value="-15" aria-label="Gate threshold" style="width:120px; vertical-align:middle">
+        <span class="note" id="gate-val">-15 dB</span>
+        <div class="note" style="margin:4px 0 8px">Mutes leftover echoes in song.ogg; only sounds within this level of the mix pass. Removed echoes go to the instruments, so the full mix is unchanged. Avoid on songs whose song.ogg holds real uncharted music.</div>
+        <button class="btn" id="build">Build variant</button>
+        <div class="status-msg" id="build-msg"></div>
+      </div>
+    </div>`}
+    ${s.raw.length ? `<h3 style="margin-top:6px;color:var(--muted)">Raw model outputs (before chart filtering), heard in “Raw model outputs” mode</h3>
+    <table><thead><tr><th>Model output</th><th></th><th></th><th>Volume</th><th>Chart notes vs audio</th></tr></thead><tbody>${rawRows}</tbody></table>` : ""}`;
+
+  $("#play").onclick = toggle;
+  $("#seek").oninput = e => seek(+e.target.value);
+  document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+  document.querySelectorAll("[data-mute]").forEach(b => b.onclick = () => { mute[b.dataset.mute] = !mute[b.dataset.mute]; update(); });
+  document.querySelectorAll("[data-solo]").forEach(b => b.onclick = () => { solo[b.dataset.solo] = !solo[b.dataset.solo]; update(); });
+  document.querySelectorAll("[data-vol]").forEach(r => r.oninput = () => { vol[r.dataset.vol] = r.value / 100; update(); });
+  document.querySelectorAll("canvas.tl").forEach(c => {
+    c.onclick = e => { const r = c.getBoundingClientRect(); seek((e.clientX - r.left) / r.width * duration); };
+  });
+  const miss = $("#miss");
+  if (miss) {
+    miss.onpointerdown = () => { missHeld = true; update(); };
+    miss.onpointerup = miss.onpointerleave = () => { missHeld = false; update(); };
+  }
+  if (!isBench) wireDecisions(s);
+  drawTimelines();
+  update();
+}
+
+function wireDecisions(s) {
+  const msg = (id, text, err) => { const m = $(id); m.textContent = text; m.className = `status-msg${err ? " err" : ""}`; };
+  const decide = async (action, body) => {
+    const next = nextToReview();
+    document.querySelectorAll("#commit, #skip, #build").forEach(b => b.disabled = true);
+    try {
+      stop();
+      await api(action, body);
+      await refresh(next);
+    } catch (err) {
+      msg("#decide-msg", err.message, true);
+      document.querySelectorAll("#commit, #skip, #build").forEach(b => b.disabled = false);
+    }
+  };
+  $("#commit").onclick = () => decide("commit", { folder: s.folder });
+  $("#skip").onclick = () => decide("skip", { source: s.source });
+  $("#gate-db").oninput = e => { $("#gate-val").textContent = `${e.target.value} dB`; $("#gate").checked = true; };
+  $("#build").onclick = async () => {
+    const fill = FILL_ORDER.filter(st => $(`[data-fill="${st}"]`)?.checked);
+    const gate = $("#gate").checked ? +$("#gate-db").value : null;
+    if (!fill.length && gate === null) return msg("#build-msg", "Tick at least one option.", true);
+    $("#build").disabled = true;
+    msg("#build-msg", "Building… this takes up to a minute (the gate takes longest).");
+    try {
+      const { job } = await api("remix", { folder: s.folder, fill, gate });
+      let st;
+      do { await new Promise(r => setTimeout(r, 1500)); st = await (await fetch(`/api/job/${job}`)).json(); }
+      while (st.status === "queued" || st.status === "running");
+      if (st.status !== "done") throw new Error(st.error || "failed");
+      if (cur === s) await refresh(`folder:${st.folder}`); else await refresh();
+    } catch (err) { msg("#build-msg", err.message, true); $("#build").disabled = false; }
+  };
+}
+
+function drawTimelines(t = null) {
+  const chartCol = css("--chart"), audioCol = css("--audio"), trackCol = css("--track"), headCol = css("--text");
+  document.querySelectorAll("canvas.tl").forEach(c => {
+    const w = c.clientWidth, h = c.clientHeight, dpr = devicePixelRatio || 1;
+    if (!w) return;
+    if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = trackCol; g.fillRect(0, 0, w, h);
+    const x = s => s / duration * w;
+    g.fillStyle = chartCol;
+    for (const [a, b] of JSON.parse(c.dataset.chart)) g.fillRect(x(a), 2, Math.max(1, x(b) - x(a)), 8);
+    g.fillStyle = audioCol;
+    JSON.parse(c.dataset.act).forEach((db, i) => {
+      if (db < -40) return;
+      g.globalAlpha = Math.min(1, Math.max(0.15, (db + 40) / 40));
+      g.fillRect(x(i), 13, Math.max(1, x(i + 1) - x(i)), h - 15);
+    });
+    g.globalAlpha = 1;
+    if (t !== null) { g.fillStyle = headCol; g.fillRect(x(t), 0, 1.5, h); }
+  });
+}
+
+async function setMode(m) {
+  if (m === "raw" && !cur.raw.every(n => buffers[`raw/${n}`])) {
+    const btn = $('[data-mode="raw"]'); if (btn) btn.textContent = "Loading raw outputs…";
+    const song = cur;
+    await fetchBuffers(song, song.raw.map(n => [`raw/${n}`, `raw/${n}.ogg`, song.raw_folder]));
+    if (cur !== song) return;
+    if (btn) btn.textContent = "Raw model outputs";
+    if (playing) { stop(); start(); }  // new buffers need sources
+  }
+  mode = m; update();
+}
+
+function gainFor(key) {
+  if (key === "original") return mode === "original" ? 1 : 0;
+  const [group, n] = key.split("/");
+  if (group !== mode) return 0;
+  const name = group === "raw" ? `raw:${n}` : n;
+  const scope = Object.keys(solo).filter(k => solo[k] && (group === "raw") === k.startsWith("raw:"));
+  if (scope.length && !solo[name]) return 0;
+  if (mute[name]) return 0;
+  if (missHeld && n === "guitar") return 0;
+  return vol[name] ?? 1;
+}
+
+function update() {
+  for (const [key, g] of Object.entries(gains)) g.gain.setTargetAtTime(gainFor(key), ctx.currentTime, 0.01);
+  document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("on", b.dataset.mode === mode));
+  document.querySelectorAll("[data-mute]").forEach(b => b.classList.toggle("on", !!mute[b.dataset.mute]));
+  document.querySelectorAll("[data-solo]").forEach(b => b.classList.toggle("on", !!solo[b.dataset.solo]));
+  const miss = $("#miss"); if (miss) miss.classList.toggle("on", missHeld);
+}
+
+function start() {
+  ctx.resume();
+  sources = []; gains = {};
+  const when = ctx.currentTime + 0.05;
+  for (const [key, buf] of Object.entries(buffers)) {
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const g = ctx.createGain(); g.gain.value = gainFor(key);
+    src.connect(g).connect(ctx.destination);
+    src.start(when, Math.min(offset, buf.duration));
+    sources.push(src); gains[key] = g;
+  }
+  startedAt = when - offset; playing = true;
+  $("#play").textContent = "Pause";
+  requestAnimationFrame(tick);
+}
+
+function stop(keepOffset = true) {
+  if (playing && keepOffset) offset = ctx.currentTime - startedAt;
+  for (const s of sources) { try { s.stop(); } catch {} }
+  sources = []; gains = {}; playing = false;
+  const p = $("#play"); if (p) p.textContent = "Play";
+}
+
+function toggle() { if (!cur) return; playing ? stop() : start(); }
+function seek(t) { const was = playing; stop(false); offset = Math.max(0, Math.min(t, duration)); if (was) start(); else tick(); }
+
+let lastDraw = 0;
+function tick() {
+  const t = playing ? ctx.currentTime - startedAt : offset;
+  if (playing && t >= duration) { stop(false); offset = 0; }
+  const time = $("#time"), sk = $("#seek");
+  if (time) time.textContent = `${fmt(Math.max(0, t))} / ${fmt(duration)}`;
+  if (sk && document.activeElement !== sk) sk.value = Math.max(0, t);
+  if (performance.now() - lastDraw > 250 || !playing) { drawTimelines(Math.max(0, t)); lastDraw = performance.now(); }
+  if (playing) requestAnimationFrame(tick);
+}
+
+document.addEventListener("keydown", e => {
+  if (!cur || e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if (e.code === "Space") { e.preventDefault(); toggle(); }
+  if (e.key === "a" || e.key === "A") setMode(mode === "original" ? "split" : "original");
+  if ((e.key === "m" || e.key === "M") && !missHeld) { missHeld = true; update(); }
+});
+document.addEventListener("keyup", e => { if (e.key === "m" || e.key === "M") { missHeld = false; update(); } });
+addEventListener("resize", () => cur && drawTimelines());
+
+refresh().then(() => selectByKey(reviewOrder[0] || null));
+</script>
+</body>
+</html>

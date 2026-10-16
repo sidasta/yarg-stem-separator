@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+models/
+staging/
+staging-*/
+*.tmp
+*.lock
