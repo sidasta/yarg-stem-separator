@@ -1,6 +1,6 @@
 # yarg-stem-separator
 
-Splits single-file YARG / Clone Hero songs (`song.ogg`) into instrument stems
+Splits single-file YARG / Clone Hero songs (`song.ogg`, `.opus`, `.mp3` or `.wav`) into instrument stems
 (`vocals`, `guitar`, `rhythm` (bass), `drums`, `keys`) with the BS-Roformer-SW model,
 lets you listen and choose, then writes the result into the song folder (undoable).
 
@@ -11,8 +11,10 @@ lets you listen and choose, then writes the result into the song folder (undoabl
 - Nothing in your library changes until you press **Commit**.
 - It only works on audio you already have; it doesn't download songs or audio of any kind.
 - Needs Windows and an NVIDIA graphics card (the separation is done by an AI model).
-- Only songs whose audio is `song.ogg` are processed. YARG also supports `.opus` and
-  `.mp3` audio, but songs using those are skipped for now.
+- Works with song folders whose audio is `song.ogg`, `song.opus`, `song.mp3` or `song.wav`.
+  New tracks are always written as `.ogg`. Most testing has been on `.ogg` songs.
+- Rock Band CON packages (`*_rb3con` etc.) aren't handled: they normally already have
+  separate tracks, and YARG plays them directly.
 
 ## Quick start
 
@@ -39,13 +41,13 @@ lets you listen and choose, then writes the result into the song folder (undoabl
   mutes leftover echoes and moves them into the instruments (full mix unchanged); don't
   use it when song.ogg holds real uncharted music.
 - **Commit this version** (the plain split or any variant) adds the stems to the song folder,
-  renames the original to `song.ogg.orig`, and writes `stemsplit-commit.json` listing
+  renames the original audio to `song.<ext>.orig` (e.g. `song.mp3.orig`), and writes `stemsplit-commit.json` listing
   what was added. **Skip song** leaves the folder untouched. Both clear that song's
   staged files and move on to the next song.
 - **Commit all unflagged songs** (under Library & splitting) commits the plain split of
   every song in "Ready to review" at once.
 - Committed songs can be **undone** from the page: the added files are removed and
-  `song.ogg` is restored. After committing, rescan songs in YARG.
+  the original song audio is restored. After committing, rescan songs in YARG.
 
 Songs that already have stems are never touched. Staging takes about 60–90 MB per song
 until it is committed or skipped (`staging/`).

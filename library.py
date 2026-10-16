@@ -4,11 +4,12 @@ State lives in staging/state.json, keyed by song folder path:
   pending    found by a scan, waiting to be split
   split      staged and waiting for review
   failed     splitting raised an error (see "error")
-  committed  stems written into the song folder (song.ogg backed up as song.ogg.orig)
+  committed  stems written into the song folder (song.<ext> backed up as song.<ext>.orig)
   skipped    reviewed and rejected; song folder untouched
 
 Committing writes stemsplit-commit.json into the song folder listing the files it added,
-so undo removes exactly those and restores song.ogg from the backup.
+so undo removes exactly those and restores the original song audio from the backup.
+Songs may start as song.ogg, .opus, .mp3 or .wav; the new tracks are always .ogg.
 """
 
 import contextlib
@@ -22,7 +23,6 @@ from pathlib import Path
 
 import stemsplit
 
-BACKUP_NAME = "song.ogg.orig"
 RECORD_NAME = "stemsplit-commit.json"
 TMP_SUFFIX = ".stemsplit-tmp"
 
@@ -112,12 +112,13 @@ def sync_staged(staging):
 
 
 def find_songs(roots):
-    """Song folders under roots that have a single song.ogg and no separate stems yet."""
+    """Song folders under roots that have a single song audio file and no separate stems yet."""
     for root in map(Path, roots):
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
             names = {f.lower() for f in filenames}
-            if "song.ogg" not in names or not names & {"song.ini", "notes.mid", "notes.chart"}:
+            has_audio = any(f"song{ext}" in names for ext in stemsplit.SONG_EXTS)
+            if not has_audio or not names & {"song.ini", "notes.mid", "notes.chart"}:
                 continue
             song_dir = Path(dirpath).resolve()
             if not stemsplit.existing_stems(song_dir):
@@ -157,7 +158,7 @@ def scan(roots, staging, retry_failed=False):
                 set_song(state, song_dir, status="pending")
         todo = [Path(s) for s, e in state["songs"].items()
                 if e["status"] == "pending" or (retry_failed and e["status"] == "failed")]
-    return len(found), [s for s in todo if (s / "song.ogg").exists()]
+    return len(found), [s for s in todo if stemsplit.song_audio(s)]
 
 
 def suggested_fill(report):
@@ -269,17 +270,20 @@ def commit(staging, folder):
     if not m or m.get("kind") != "split":
         raise ValueError("not a staged split")
     song_dir = Path(m["source"])
-    song = song_dir / "song.ogg"
+    song_file = m.get("song_file", "song.ogg")
+    song = song_dir / song_file
+    backup = song_file + ".orig"
     if not song.exists():
         raise ValueError(f"{song} no longer exists")
-    if (song_dir / BACKUP_NAME).exists() or (song_dir / RECORD_NAME).exists():
+    if list(song_dir.glob("song.*.orig")) or (song_dir / RECORD_NAME).exists():
         raise ValueError(f"{song_dir.name} already has a backup or commit record; undo or tidy it first")
-    if _sha1(song) != _sha1(staged / "original.ogg"):
-        raise ValueError("song.ogg has changed since it was split; re-split it first")
-    new_files = sorted(p.name for p in staged.glob("*.ogg") if p.name != "original.ogg")
-    clash = [n for n in new_files if n != "song.ogg" and (song_dir / n).exists()]
+    if _sha1(song) != _sha1(staged / m.get("original_file", "original.ogg")):
+        raise ValueError(f"{song_file} has changed since it was split; re-split it first")
+    new_files = sorted(p.name for p in staged.glob("*.ogg") if not p.name.startswith("original."))
+    # song.ogg may only be overwritten when it is the file being replaced
+    clash = [n for n in new_files if n != song_file and (song_dir / n).exists()]
     if clash or stemsplit.existing_stems(song_dir):
-        raise ValueError(f"song folder already has stem files: {', '.join(clash or stemsplit.existing_stems(song_dir))}")
+        raise ValueError(f"song folder already has files that would be overwritten: {', '.join(clash or stemsplit.existing_stems(song_dir))}")
 
     # Copy to temporary names first, so a failure part-way leaves the song folder as it was.
     tmp = []
@@ -287,7 +291,7 @@ def commit(staging, folder):
         for name in new_files:
             shutil.copy2(staged / name, song_dir / (name + TMP_SUFFIX))
             tmp.append(name)
-        song.rename(song_dir / BACKUP_NAME)
+        song.rename(song_dir / backup)
     except Exception:
         for name in tmp:
             (song_dir / (name + TMP_SUFFIX)).unlink(missing_ok=True)
@@ -298,7 +302,7 @@ def commit(staging, folder):
     if not m.get("variant") and m.get("variant_of"):  # variants made before the label was stored
         variant = m["song"][len(m["variant_of"]):].strip().strip("[]") or variant
     record = {"committed": _now(), "variant": variant, "model": m.get("model"),
-              "files": [n for n in new_files if n != "song.ogg"], "replaced": "song.ogg", "backup": BACKUP_NAME}
+              "files": [n for n in new_files if n != song_file], "replaced": song_file, "backup": backup}
     (song_dir / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     with edit_state(staging) as state:
         set_song(state, song_dir, status="committed", staged=None, variant=record["variant"],
@@ -308,16 +312,19 @@ def commit(staging, folder):
 
 
 def undo(staging, source):
-    """Remove the stems a commit added and restore the original song.ogg."""
+    """Remove the files a commit added and restore the original song audio."""
     song_dir = Path(source)
     record_path = song_dir / RECORD_NAME
-    if not record_path.exists() or not (song_dir / BACKUP_NAME).exists():
+    if not record_path.exists():
         raise ValueError(f"no commit to undo in {song_dir.name}")
     record = json.loads(record_path.read_text(encoding="utf-8"))
+    backup, replaced = record.get("backup", "song.ogg.orig"), record.get("replaced", "song.ogg")
+    if Path(backup).name != backup or Path(replaced).name != replaced or not (song_dir / backup).exists():
+        raise ValueError(f"the backup of the original audio is missing in {song_dir.name}")
     for name in record["files"]:
         if Path(name).name == name:  # only plain file names from our own record
             (song_dir / name).unlink(missing_ok=True)
-    os.replace(song_dir / BACKUP_NAME, song_dir / "song.ogg")
+    os.replace(song_dir / backup, song_dir / replaced)
     record_path.unlink()
     with edit_state(staging) as state:
         set_song(state, song_dir, status="pending", staged=None, variant=None, files=None, flags=[])

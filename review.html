@@ -223,9 +223,9 @@ function nextToReview() {
 function renderEntry(source, e) {
   const actions = {
     committed: `<p>Committed <b>${esc(e.variant || "")}</b> on ${esc((e.updated || "").replace("T", " "))}. Added:
-      <code>${esc((e.files || []).join(", "))}</code>; the original is kept as <code>song.ogg.orig</code>.</p>
+      <code>${esc((e.files || []).join(", "))}</code>; the original song audio is kept as a <code>.orig</code> backup.</p>
       <button class="btn danger" id="act">Undo commit</button>
-      <p class="note">Undo deletes the added stem files, restores the original song.ogg, and puts the song back in the queue to be split again.</p>`,
+      <p class="note">Undo deletes the added stem files, restores the original song audio, and puts the song back in the queue to be split again.</p>`,
     skipped: `<p>Skipped. The song folder was not changed.</p><button class="btn" id="act">Un-skip (split again on the next queue run)</button>`,
     failed: `<p class="warn">Splitting failed: ${esc(e.error || "")}</p><button class="btn" id="act">Retry on the next queue run</button>`,
     pending: `<p>Waiting to be split. Run the queue command to process it.</p>`,
@@ -259,7 +259,7 @@ async function loadStaged(song) {
   ctx = ctx || new AudioContext();
   cur = song; buffers = {}; offset = 0; mode = "split"; mute = {}; solo = {}; vol = {};
   $("#main").innerHTML = `<h2>${esc(song.song)}</h2><p class="loading">Loading audio…</p>`;
-  const wanted = [["original", "original.ogg"]];
+  const wanted = [["original", song.original_file || "original.ogg"]];
   for (const f of song.files) if (f !== "original") wanted.push([`split/${f}`, `${f}.ogg`]);
   for (const f of song.truth) wanted.push([`truth/${f}`, `truth/${f}.ogg`]);
   await fetchBuffers(song, wanted);
@@ -330,8 +330,8 @@ function render() {
       <div class="card">
         <h3>Decide</h3>
         <div class="row"><button class="btn primary" id="commit">Commit this version</button><button class="btn" id="skip">Skip song</button></div>
-        <p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces song.ogg, keeping the original as
-          song.ogg.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>
+        <p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
+          ${esc(s.song_file || "song.ogg")}.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>
         <div class="status-msg" id="decide-msg"></div>
       </div>
       <div class="card">
@@ -569,7 +569,7 @@ async function renderSetup() {
     msg("#scan-msg", "Looking through your folders…");
     try {
       const r = await api("scan", {});
-      msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song.ogg; ${r.todo} still to split` +
+      msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song audio file; ${r.todo} still to split` +
         (r.todo ? ` (about ${Math.max(1, Math.round(r.todo * 0.75))} min).` : "."));
       refresh();
     } catch (err) { msg("#scan-msg", err.message, true); }

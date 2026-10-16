@@ -106,7 +106,7 @@ def list_dirs(path):
     except PermissionError:
         pass
     parent = str(p.parent) if p.parent != p else ""
-    looks_like_song = (p / "song.ogg").exists() or (p / "song.ini").exists()
+    looks_like_song = stemsplit.song_audio(p) is not None or (p / "song.ini").exists()
     return {"path": str(p), "parent": parent, "dirs": dirs, "is_song": looks_like_song}
 
 
@@ -144,7 +144,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             path = self.staging / folder
             raw_folder = folder if (path / "raw").exists() else data.get("raw_from", folder)
             data.update(folder=folder, raw_folder=raw_folder,
-                        files=sorted(p.stem for p in path.glob("*.ogg")),
+                        files=sorted(p.stem for p in path.glob("*.ogg") if p.stem != "original"),
+                        original_file=data.get("original_file", "original.ogg"),
                         truth=[], raw=sorted(p.stem for p in (self.staging / raw_folder / "raw").glob("*.ogg")))
             songs.append(data)
         for m in sorted(self.staging.glob("BENCH - */manifest.json")):

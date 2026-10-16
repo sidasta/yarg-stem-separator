@@ -62,8 +62,14 @@ def ffmpeg_exe():
 
 def read_audio(path):
     """Return (float32 array shaped [frames, channels], sample rate)."""
-    data, sr = sf.read(str(path), dtype="float32", always_2d=True)
-    return data, sr
+    try:
+        data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        return data, sr
+    except sf.LibsndfileError:  # e.g. some .opus files; let ffmpeg decode them instead
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "x.wav"
+            subprocess.run([ffmpeg_exe(), "-v", "error", "-y", "-i", str(path), "-c:a", "pcm_f32le", str(wav)], check=True)
+            return sf.read(str(wav), dtype="float32", always_2d=True)
 
 
 def write_ogg(path, data, sr, quality=8):
@@ -408,7 +414,7 @@ def write_outputs(out_dir, files, sr, report, original=None, raw=None):
     for name, data in files.items():
         write_ogg(out_dir / f"{name}.ogg", data, sr)
     if original is not None:
-        shutil.copy2(original, out_dir / "original.ogg")
+        shutil.copy2(original, out_dir / f"original{Path(original).suffix.lower()}")
     if raw:  # every model output, kept or not, for diagnosis and re-assignment
         (out_dir / "raw").mkdir()
         for name, data in raw.items():
@@ -420,6 +426,17 @@ def write_outputs(out_dir, files, sr, report, original=None, raw=None):
 STEM_FILE_NAMES = {"guitar", "rhythm", "bass", "keys", "drums", "drums_1", "drums_2", "drums_3", "drums_4",
                    "vocals", "vocals_1", "vocals_2"}
 AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".flac"}
+# Single-file song audio we can split, in the order YARG-style folders usually use them.
+SONG_EXTS = (".ogg", ".opus", ".mp3", ".wav")
+
+
+def song_audio(song_dir):
+    """The song's single audio file (song.ogg / .opus / .mp3 / .wav), or None."""
+    for ext in SONG_EXTS:
+        p = Path(song_dir) / f"song{ext}"
+        if p.exists():
+            return p
+    return None
 
 
 def existing_stems(song_dir):
@@ -449,16 +466,20 @@ def staged_name(staging, song_dir):
 def split_song(song_dir, model=DEFAULT_MODEL, staging=STAGING_DIR):
     """Separate one song folder into staging. Returns (staging folder name, report)."""
     song_dir, staging = Path(song_dir).resolve(), Path(staging)
-    mix, sr = read_audio(song_dir / "song.ogg")
+    src = song_audio(song_dir)
+    if src is None:
+        raise ValueError(f"no song audio ({', '.join('song' + e for e in SONG_EXTS)}) in {song_dir}")
+    mix, sr = read_audio(src)
     charted = charted_instruments(song_dir)
     files, report, raw = split_mix(mix, sr, charted, model, chart_spans(song_dir))
-    report.update(song=song_dir.name, source=str(song_dir), kind="split", charted=charted)
+    report.update(song=song_dir.name, source=str(song_dir), kind="split", charted=charted,
+                  song_file=src.name, original_file=f"original{src.suffix.lower()}")
     name = staged_name(staging, song_dir)
     for other in staging.glob("*/manifest.json"):  # variants of an earlier split are now stale
         m = read_manifest(other.parent)
         if m and m.get("source") == str(song_dir) and m.get("variant_of"):
             shutil.rmtree(other.parent)
-    write_outputs(staging / name, files, sr, report, original=song_dir / "song.ogg", raw=raw)
+    write_outputs(staging / name, files, sr, report, original=src, raw=raw)
     return name, report
 
 
@@ -468,7 +489,8 @@ def remix(staged, fill=(), gate_song_db=None):
     report = read_manifest(staged)
     base_folder = report.get("raw_from") or staged.name
     raw_dir = staged / "raw" if (staged / "raw").exists() else staged.parent / base_folder / "raw"
-    mix, sr = read_audio(staged / "original.ogg")
+    original = staged / report.get("original_file", "original.ogg")
+    mix, sr = read_audio(original)
     stems = {p.stem: fit_length(read_audio(p)[0], len(mix), mix.shape[1]) for p in raw_dir.glob("*.ogg")}
     files, new = assemble(mix, sr, stems, report["charted"], chart_spans(report["source"]), list(fill), gate_song_db)
     parts = []
@@ -480,16 +502,17 @@ def remix(staged, fill=(), gate_song_db=None):
     base = report.get("variant_of", report["song"])
     new.update(model=report["model"], seconds=report["seconds"], song=f"{base} [{label}]", variant=label,
                source=report["source"], kind="split", charted=report["charted"], variant_of=base,
-               raw_from=base_folder)
+               raw_from=base_folder, song_file=report.get("song_file", "song.ogg"),
+               original_file=original.name)
     name = f"{base_folder} [{label}]"
-    write_outputs(staged.parent / name, files, sr, new, original=staged / "original.ogg")
+    write_outputs(staged.parent / name, files, sr, new, original=original)
     return name
 
 
 def cmd_split(args):
     for song_dir in map(Path, args.songs):
-        if not (song_dir / "song.ogg").exists():
-            print(f"SKIP {song_dir.name}: no song.ogg")
+        if song_audio(song_dir) is None:
+            print(f"SKIP {song_dir.name}: no song.ogg/.opus/.mp3/.wav")
             continue
         existing = existing_stems(song_dir)
         if existing and not args.force:
@@ -583,7 +606,7 @@ def main():
     p.add_argument("--limit", type=int, default=0, help="stop after this many songs")
     p.add_argument("--no-variants", action="store_true",
                    help="don't prepare a fill+gate variant for flagged songs")
-    p = sub.add_parser("undo", help="undo a commit: remove added stems, restore song.ogg")
+    p = sub.add_parser("undo", help="undo a commit: remove added stems, restore the original song audio")
     p.add_argument("songs", nargs="+", help="song folder(s)")
     p.add_argument("--staging", default=str(STAGING_DIR))
     args = ap.parse_args()
