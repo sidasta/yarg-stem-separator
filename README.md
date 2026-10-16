@@ -1,8 +1,10 @@
-# yarg-stem-splitter
+# yarg-stem-separator
 
 Splits single-file YARG / Clone Hero songs (`song.ogg`) into instrument stems
 (`vocals`, `guitar`, `rhythm` (bass), `drums`, `keys`) with the BS-Roformer-SW model,
 lets you listen and choose, then writes the result into the song folder (undoable).
+
+![Review page: per-track mute/solo, chart notes vs audio timelines, and commit/variant controls](docs/review-page.webp)
 
 - Only instruments charted in `song.ini` / `notes.mid` get a stem; the new `song.ogg`
   is everything else, so all files played together reproduce the original.

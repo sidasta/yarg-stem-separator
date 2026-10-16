@@ -218,7 +218,10 @@ def commit(staging, folder):
         raise
     for name in new_files:
         os.replace(song_dir / (name + TMP_SUFFIX), song_dir / name)
-    record = {"committed": _now(), "variant": m.get("variant", "plain split"), "model": m.get("model"),
+    variant = m.get("variant") or "plain split"
+    if not m.get("variant") and m.get("variant_of"):  # variants made before the label was stored
+        variant = m["song"][len(m["variant_of"]):].strip().strip("[]") or variant
+    record = {"committed": _now(), "variant": variant, "model": m.get("model"),
               "files": [n for n in new_files if n != "song.ogg"], "replaced": "song.ogg", "backup": BACKUP_NAME}
     (song_dir / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     with edit_state(staging) as state:
