@@ -6,3 +6,4 @@ staging-*/
 *.tmp
 *.lock
 con-backups/
+tools/
