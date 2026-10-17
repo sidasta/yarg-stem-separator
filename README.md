@@ -1,5 +1,7 @@
 # yarg-stem-separator
 
+[![Linux smoke test](https://github.com/sidasta/yarg-stem-separator/actions/workflows/linux-smoke-test.yml/badge.svg)](https://github.com/sidasta/yarg-stem-separator/actions/workflows/linux-smoke-test.yml)
+
 Splits single-file YARG / Clone Hero songs (`song.ogg`, `.opus`, `.mp3` or `.wav`) into instrument stems
 (`vocals`, `guitar`, `rhythm` (bass), `drums`, `keys`) with the BS-Roformer-SW model,
 lets you listen and choose, then writes the result into the song folder (undoable).
@@ -68,12 +70,17 @@ The launcher detects your hardware and installs the matching version automatical
 | **NVIDIA** graphics card | ~45 seconds | Tested (Windows); Linux untested |
 | **AMD Radeon** on Linux (recent RX 7000 / RX 9000) | GPU speed | Untested — uses PyTorch's official ROCm build |
 | **AMD Radeon** on Windows (recent RX 7000 / RX 9000) | GPU speed | **Experimental, untested** — uses AMD's PyTorch for Windows; needs AMD driver 26.2.2 or newer |
-| No supported graphics card (CPU only) | ~10–15 minutes | Tested (Windows) |
+| No supported graphics card (CPU only) | ~10–15 minutes | Tested (Windows); Linux checked automatically on every launcher change |
 
 If an AMD card is found but can't be used (older card or driver), the CPU version is
 installed instead, because AMD's build is very slow without a working GPU. The
 **Library & splitting** page shows what it's running on. If you try the AMD or Linux
 routes, please report how it goes in the GitHub issues.
+
+The Linux launcher is checked by a [GitHub Actions smoke test](.github/workflows/linux-smoke-test.yml)
+on a clean Ubuntu machine: it sets itself up from scratch (CPU mode), starts the page and
+splits a short generated clip. It runs whenever the launcher or setup script changes, and
+can be run by hand from the repository's **Actions** tab.
 
 To force a choice, set `STEMSEP_DEVICE` to `nvidia`, `amd` or `cpu` before the first run
 (e.g. `set STEMSEP_DEVICE=cpu` in a Command Prompt, then run the .bat from it). To switch
