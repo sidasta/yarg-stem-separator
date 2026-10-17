@@ -1,7 +1,8 @@
 @echo off
 rem Double-click to open the YARG Stem Separator in your browser.
-rem First run sets up Python and the packages it needs (a few GB). If uv isn't installed,
-rem a private copy is downloaded into the "tools" folder; nothing is installed system-wide.
+rem First run sets up Python and the packages for your graphics card (NVIDIA, AMD or CPU-only).
+rem If uv isn't installed, a private copy is downloaded into the "tools" folder; nothing is
+rem installed system-wide. Set STEMSEP_DEVICE=nvidia, amd or cpu to override the hardware choice.
 setlocal
 cd /d "%~dp0"
 title YARG Stem Separator
@@ -14,34 +15,39 @@ if exist ".venv\Scripts\python.exe" (
         rmdir /s /q ".venv"
     )
 )
-if not exist ".venv\Scripts\python.exe" (
-    call :setup
-    if errorlevel 1 goto :failed
-)
-if not exist ".venv\Scripts\ffmpeg.exe" call :ffmpeg
-
+rem (Labels and goto rather than bracketed blocks: %UV% inside a block would be read
+rem before :find_uv sets it.)
+if not exist ".venv\Scripts\python.exe" goto :make_venv
+:venv_ready
+rem The setup script writes this marker only after everything installed successfully.
+if not exist ".venv\stemsep-backend.json" goto :install
+:start
 ".venv\Scripts\python.exe" review.py --open %*
 if errorlevel 1 goto :failed
 goto :eof
 
-:setup
+:make_venv
 call :find_uv
-if errorlevel 1 exit /b 1
-echo Setting up Python and the separation packages.
-echo The first time, this downloads a few GB and takes several minutes.
-echo.
-"%UV%" venv --python 3.12 .venv || exit /b 1
-"%UV%" pip install --python .venv\Scripts\python.exe torch torchaudio --index-url https://download.pytorch.org/whl/cu128 || exit /b 1
-"%UV%" pip install --python .venv\Scripts\python.exe "audio-separator[gpu]" soundfile imageio-ffmpeg mido audioread || exit /b 1
-call :ffmpeg
+if errorlevel 1 goto :failed
+echo Setting up Python. The first time, this downloads a few GB and takes several minutes.
+"%UV%" venv --python 3.12 .venv
+if errorlevel 1 goto :failed
+goto :venv_ready
+
+:install
+call :find_uv
+if errorlevel 1 goto :failed
+".venv\Scripts\python.exe" scripts\setup_env.py
+if errorlevel 1 goto :failed
 echo.
 echo Setup complete.
-exit /b 0
+goto :start
 
 :find_uv
+if defined UV exit /b 0
 where uv >nul 2>nul
 if not errorlevel 1 (
-    set "UV=uv"
+    for /f "delims=" %%u in ('where uv') do if not defined UV set "UV=%%u"
     exit /b 0
 )
 rem No uv installed: use a private copy, and keep everything it downloads inside this folder.
@@ -57,10 +63,6 @@ if not exist "%UV%" (
     echo https://docs.astral.sh/uv/getting-started/installation/ and run this again.
     exit /b 1
 )
-exit /b 0
-
-:ffmpeg
-for %%f in (".venv\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-*.exe") do copy /y "%%~f" ".venv\Scripts\ffmpeg.exe" >nul
 exit /b 0
 
 :failed

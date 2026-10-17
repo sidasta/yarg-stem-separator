@@ -10,7 +10,8 @@ lets you listen and choose, then writes the result into the song folder (undoabl
   is everything else, so all files played together reproduce the original.
 - Nothing in your library changes until you press **Commit**.
 - It only works on audio you already have; it doesn't download songs or audio of any kind.
-- Needs Windows and an NVIDIA graphics card (the separation is done by an AI model).
+- Runs on Windows and Linux. The separation is done by an AI model, which is fastest on a
+  graphics card (see [Hardware](#hardware)); any PC can use the slower CPU-only mode.
 - Works with song folders whose audio is `song.ogg`, `song.opus`, `song.mp3` or `song.wav`.
   New tracks are always written as `.ogg`. Most testing has been on `.ogg` songs.
 - Rock Band CON packages are supported when they hold a single song whose audio is
@@ -58,6 +59,38 @@ Python and its download cache there too, so nothing is installed system-wide and
 **uninstalling is just deleting the folder**. (If you already have uv, it's used as normal.)
 If you move the folder later, the .bat notices and quickly rebuilds its setup.
 
+## Hardware
+
+The launcher detects your hardware and installs the matching version automatically:
+
+| Hardware | Speed (4-minute song) | Status |
+|---|---|---|
+| **NVIDIA** graphics card | ~45 seconds | Tested (Windows); Linux untested |
+| **AMD Radeon** on Linux (recent RX 7000 / RX 9000) | GPU speed | Untested — uses PyTorch's official ROCm build |
+| **AMD Radeon** on Windows (recent RX 7000 / RX 9000) | GPU speed | **Experimental, untested** — uses AMD's PyTorch for Windows; needs AMD driver 26.2.2 or newer |
+| No supported graphics card (CPU only) | ~10–15 minutes | Tested (Windows) |
+
+If an AMD card is found but can't be used (older card or driver), the CPU version is
+installed instead, because AMD's build is very slow without a working GPU. The
+**Library & splitting** page shows what it's running on. If you try the AMD or Linux
+routes, please report how it goes in the GitHub issues.
+
+To force a choice, set `STEMSEP_DEVICE` to `nvidia`, `amd` or `cpu` before the first run
+(e.g. `set STEMSEP_DEVICE=cpu` in a Command Prompt, then run the .bat from it). To switch
+later, delete the `.venv` folder and run the launcher again.
+
+### Linux
+
+Download and extract as above (outside your songs folder), then from a terminal:
+
+```bash
+./start-stem-separator.sh          # or: bash start-stem-separator.sh
+```
+
+It does the same as the .bat (needs `curl`, `tar` and `sha256sum`, which most distros
+have). For AMD cards, the ROCm driver must already be installed (AMD supports Ubuntu
+22.04/24.04).
+
 ## Reviewing
 
 - **Needs a closer listen**: songs where a charted part is mostly missing from its stem
@@ -84,17 +117,18 @@ until it is committed or skipped (`staging/`).
 
 ## Manual setup and command line
 
-The .bat does this on first run; to do it by hand (Windows, NVIDIA GPU):
+The launchers do this on first run; to do it by hand:
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv/Scripts/python.exe torch torchaudio --index-url https://download.pytorch.org/whl/cu128
-uv pip install --python .venv/Scripts/python.exe "audio-separator[gpu]" soundfile imageio-ffmpeg mido audioread
-cp .venv/Lib/site-packages/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe .venv/Scripts/ffmpeg.exe
+.venv/Scripts/python.exe scripts/setup_env.py      # Linux: .venv/bin/python
 ```
 
+`scripts/setup_env.py` picks the hardware (or uses `STEMSEP_DEVICE`), installs the
+matching PyTorch build and the separation packages, and copies ffmpeg into the venv.
+
 The onnxruntime CUDA 13 warnings are harmless (RoFormer runs on PyTorch). Everything the
-page does is also available from the command line:
+page does is also available from the command line (on Linux use `.venv/bin/python`):
 
 ```bash
 .venv/Scripts/python.exe review.py --open                               # the web page

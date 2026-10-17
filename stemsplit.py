@@ -50,7 +50,7 @@ SILENCE_DB = -35.0
 
 
 def ffmpeg_exe():
-    exe = Path(sys.executable).parent / "ffmpeg.exe"  # copied into the venv by setup
+    exe = Path(sys.executable).parent / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")  # copied in by setup
     if exe.exists():
         return str(exe)
     exe = shutil.which("ffmpeg")

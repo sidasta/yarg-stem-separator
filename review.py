@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import string
+import sys
 import threading
 import traceback
 import webbrowser
@@ -28,6 +29,38 @@ MODELS = {
     "BS-Roformer-SW.ckpt": "BS-RoFormer SW: best quality (recommended)",
     "htdemucs_6s.yaml": "Demucs 6-stem: a little faster, weaker guitar and keys",
 }
+
+_device = None
+
+
+def device_info():
+    """What splitting runs on, for the page. Imports torch once (a couple of seconds)."""
+    global _device
+    if _device is None:
+        import torch
+        marker = Path(sys.prefix) / "stemsep-backend.json"
+        try:
+            info = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            info = {}
+        installed, fallback_from = info.get("device"), info.get("fallback_from")
+        if torch.cuda.is_available():
+            kind = "amd" if getattr(torch.version, "hip", None) else "nvidia"
+            _device = {"kind": kind, "name": torch.cuda.get_device_name(0), "gpu": True}
+        else:
+            _device = {"kind": "cpu", "name": "CPU", "gpu": False}
+        _device["installed_for"] = installed
+        _device["experimental"] = kind_is_experimental = _device["kind"] == "amd" and os.name == "nt"
+        _device["minutes_per_song"] = 0.75 if _device["gpu"] else 13
+        _device["note"] = (
+            "AMD on Windows is experimental and untested; please report how it goes." if kind_is_experimental
+            else "An AMD graphics card was found but PyTorch couldn't use it, so the CPU version was installed."
+            if fallback_from == "amd"
+            else f"An {installed.upper()} build is installed but PyTorch can't use the GPU, so splitting runs on the CPU."
+            if installed in ("nvidia", "amd") and not _device["gpu"]
+            else "")
+    return _device
+
 
 _jobs = {}
 _job_ids = itertools.count(1)
@@ -130,6 +163,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send_json(self.library())
         if self.path == "/api/settings":
             return self.send_json({"settings": library.load_settings(self.staging), "models": MODELS,
+                                   "device": device_info(),
                                    "queue": QUEUE.status()})
         if self.path == "/api/queue":
             return self.send_json(QUEUE.status())
@@ -276,6 +310,12 @@ class Server(http.server.ThreadingHTTPServer):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
+    def handle_error(self, request, client_address):
+        # The browser closing a connection early (page reload, tab closed) isn't worth a traceback.
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -296,6 +336,7 @@ def main():
             webbrowser.open(url)
         return
     library.sync_staged(staging)
+    threading.Thread(target=device_info, daemon=True).start()  # load PyTorch now, not on the first page view
     print(f"Stem separator is running at {url}", flush=True)
     print("Keep this window open while you use it; close it (or press Ctrl+C) to stop.", flush=True)
     if args.open:

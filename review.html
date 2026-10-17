@@ -542,6 +542,9 @@ async function renderSetup() {
     </div>
     <div class="card">
       <h3>Splitting</h3>
+      <p style="margin:0 0 8px">Running on: <b>${esc(setup.device.gpu ? `${setup.device.name} (${setup.device.kind.toUpperCase()} GPU)` : "CPU only")}</b>
+        ${setup.device.gpu ? "" : `<span class="warn"> · much slower: about ${setup.device.minutes_per_song} minutes per song</span>`}</p>
+      ${setup.device.note ? `<p class="note warn" style="margin:-4px 0 8px">${esc(setup.device.note)}</p>` : ""}
       <div class="row">
         <button class="btn" id="scan">Check for new songs</button>
         <button class="btn primary" id="q-start">Start splitting</button>
@@ -550,7 +553,7 @@ async function renderSetup() {
       <div class="status-msg" id="scan-msg"></div>
       <div id="q-status"></div>
       ${lib.cons_text ? `<p class="note">CON files found: ${esc(lib.cons_text)}. Encrypted CON audio is never decrypted.</p>` : ""}
-      <p class="note">Takes about 40–60 seconds per song on your GPU. You can review songs while it runs, close the page, or stop and start again later; it carries on where it left off.</p>
+      <p class="note">${setup.device.gpu ? "Takes about 40–60 seconds per song on your GPU." : "On the CPU each song takes roughly 10–15 minutes, so larger libraries are best left running overnight."} You can review songs while it runs, close the page, or stop and start again later; it carries on where it left off.</p>
     </div>
     <div class="card">
       <h3>Shortcuts</h3>
@@ -579,7 +582,7 @@ async function renderSetup() {
     try {
       const r = await api("scan", {});
       msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song audio file; ${r.todo} still to split` +
-        (r.todo ? ` (about ${Math.max(1, Math.round(r.todo * 0.75))} min).` : ".") +
+        (r.todo ? ` (about ${fmtMinutes(r.todo * (setup.device.minutes_per_song || 0.75))}).` : ".") +
         (r.cons_text ? ` CON files: ${r.cons_text}.` : ""));
       refresh();
     } catch (err) { msg("#scan-msg", err.message, true); }
@@ -606,6 +609,11 @@ async function renderSetup() {
   updateReadyButton();
   renderQueue(setup.queue);
   if (setup.queue.running) pollQueue();
+}
+
+function fmtMinutes(m) {
+  m = Math.max(1, Math.round(m));
+  return m < 90 ? `${m} min` : `${Math.round(m / 6) / 10} hours`;
 }
 
 async function showBrowser(path, onPick) {
