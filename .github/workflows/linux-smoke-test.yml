@@ -1,0 +1,82 @@
+# Checks the Linux launcher on a clean Ubuntu machine (no GPU, no uv): it should set up
+# a private uv + Python, pick the CPU build, start the review page, and split a short clip.
+name: Linux smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - start-stem-separator.sh
+      - scripts/setup_env.py
+      - .github/workflows/linux-smoke-test.yml
+
+permissions:
+  contents: read
+
+jobs:
+  linux-cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the separation model
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: separation-model-bs-roformer-sw
+
+      - name: Start the launcher (first-run setup)
+        run: |
+          # No STEMSEP_DEVICE: the runner has no GPU, so auto-detection must choose CPU.
+          ./start-stem-separator.sh --no-open > launcher.log 2>&1 &
+          for i in $(seq 1 240); do
+            if curl -sf -m 5 http://localhost:8765/api/settings > settings.json; then break; fi
+            if ! kill -0 $! 2>/dev/null; then echo "launcher exited early"; cat launcher.log; exit 1; fi
+            sleep 5
+          done
+          cat launcher.log
+          test -s settings.json || { echo "page never came up"; exit 1; }
+
+      - name: Check setup choices
+        run: |
+          test -x tools/uv || { echo "private uv was not downloaded"; exit 1; }
+          python3 - <<'EOF'
+          import json
+          s = json.load(open("settings.json"))
+          dev = s["device"]
+          print("device:", dev)
+          assert dev["kind"] == "cpu" and dev["installed_for"] == "cpu", dev
+          marker = json.load(open(".venv/stemsep-backend.json"))
+          print("marker:", marker)
+          assert marker["torch"].startswith("2.11.0"), marker
+          EOF
+          test -x .venv/bin/ffmpeg || { echo "ffmpeg was not copied into the venv"; exit 1; }
+
+      - name: Split a short test clip
+        run: |
+          mkdir -p test-lib/song
+          .venv/bin/ffmpeg -v error -f lavfi -i "sine=frequency=220:duration=12" \
+            -f lavfi -i "sine=frequency=660:duration=12" \
+            -filter_complex "[0][1]amix=inputs=2,aformat=channel_layouts=stereo" \
+            -c:a libvorbis -q:a 6 test-lib/song/song.ogg
+          printf '[song]\nname = Test\nartist = CI\ndiff_guitar = 0\ndiff_bass = 0\ndiff_drums = 0\ndiff_vocals = 0\ndiff_keys = -1\n' > test-lib/song/song.ini
+          .venv/bin/python stemsplit.py split test-lib/song --staging test-staging
+          ls -la test-staging/song
+          test -f test-staging/song/manifest.json
+          test -f test-staging/song/song.ogg
+
+      - name: Stop the launcher
+        if: always()
+        run: pkill -f "review.py" || true
+
+      - name: Keep the logs if something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-smoke-logs
+          path: |
+            launcher.log
+            settings.json
+            .venv/stemsep-backend.json
+          if-no-files-found: ignore
