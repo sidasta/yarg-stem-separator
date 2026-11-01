@@ -53,8 +53,9 @@ if [ ! -e .venv/bin/python ]; then
     echo "Setting up Python. The first time, this downloads a few GB and takes several minutes."
     "$UV" venv --python 3.12 .venv
 fi
-# The setup script writes this marker only after everything installed successfully.
-if [ ! -e .venv/stemsep-backend.json ]; then
+# The setup script writes a marker only after everything installed successfully; --check
+# also notices a setup made before this version needed more packages.
+if ! .venv/bin/python scripts/setup_env.py --check; then
     find_uv
     .venv/bin/python scripts/setup_env.py
     echo

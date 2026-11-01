@@ -19,8 +19,10 @@ rem (Labels and goto rather than bracketed blocks: %UV% inside a block would be 
 rem before :find_uv sets it.)
 if not exist ".venv\Scripts\python.exe" goto :make_venv
 :venv_ready
-rem The setup script writes this marker only after everything installed successfully.
-if not exist ".venv\stemsep-backend.json" goto :install
+rem The setup script writes a marker only after everything installed successfully; --check
+rem also notices a setup made before this version needed more packages.
+".venv\Scripts\python.exe" scripts\setup_env.py --check
+if errorlevel 1 goto :install
 :start
 ".venv\Scripts\python.exe" review.py --open %*
 if errorlevel 1 goto :failed

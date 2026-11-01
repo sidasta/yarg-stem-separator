@@ -115,9 +115,31 @@ have). For AMD cards, the ROCm driver must already be installed (AMD supports Ub
   what was added. **Skip song** leaves the folder untouched. Both clear that song's
   staged files and move on to the next song.
 - **Commit all unflagged songs** (under Library & splitting) commits the plain split of
-  every song in "Ready to review" at once.
+  every song in "Ready to review" at once, except songs with no vocals charted (see below).
 - Committed songs can be **undone** from the page: the added files are removed and
-  the original song audio is restored. After committing, rescan songs in YARG.
+  the original song audio (and chart, if vocals were added) is restored. After committing,
+  rescan songs in YARG.
+
+### Songs with no vocals charted
+
+If a song's chart has no vocal part, its review page asks whether it's an instrumental.
+If it isn't, paste the lyrics and press **Chart vocals**:
+
+- The lyrics are lined up with the separated vocal track, each syllable gets a note at the
+  pitch that's sung, and the notes are snapped to the chart's own tempo map as a new
+  `PART VOCALS` track (one phrase per lyric line). The split is then rebuilt with
+  `vocals.ogg` split out, so you can check the charted notes against the singing on the
+  vocals timeline. Nothing is separated again; it takes about half a minute on a GPU.
+- Paste one sung line per line. Labels like `[Chorus]` are ignored; words in
+  (parentheses) are treated as backing vocals and left out; write repeats out in full.
+- The page lists lines worth checking and stretches of singing with no lyrics (backing
+  vocals, "oohs"). It's a solid starting point rather than a hand-made chart: for
+  fine-tuning, commit and open it in a chart editor.
+- Commit also replaces `notes.mid` and `song.ini` (vocal difficulty set), keeping the
+  originals as `notes.mid.orig` and `song.ini.orig`; undo puts them back.
+- The first time, the lyric alignment model (about 1.2 GB) is downloaded into `models/`.
+  Only songs charted in `notes.mid` are supported (not `notes.chart`), and it isn't
+  available with AMD's experimental Windows PyTorch, which has no torchaudio.
 
 Songs that already have stems are never touched. Staging takes about 60–90 MB per song
 until it is committed or skipped (`staging/`).

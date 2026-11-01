@@ -509,8 +509,9 @@ def remix(staged, fill=(), gate_song_db=None):
                source=report["source"], kind="split", charted=report["charted"], variant_of=base,
                raw_from=base_folder, song_file=report.get("song_file", "song.ogg"),
                original_file=original.name, chart_dir=chart_dir)
-    if report.get("con"):
-        new["con"] = report["con"]
+    for key in ("con", "chart_source", "vocals_chart"):
+        if report.get(key):
+            new[key] = report[key]
     name = f"{base_folder} [{label}]"
     write_outputs(staged.parent / name, files, sr, new, original=original)
     return name

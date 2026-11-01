@@ -21,10 +21,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = Path(sys.prefix) / "stemsep-backend.json"
-COMMON = ["soundfile", "imageio-ffmpeg", "mido", "audioread"]
-# The tested PyTorch release for the NVIDIA, CPU and Linux AMD builds. (torchaudio isn't
-# needed; torchvision is a dependency of the separation library and must match torch.)
-TORCH = ["torch==2.11.0", "torchvision==0.26.0"]
+COMMON = ["soundfile", "imageio-ffmpeg", "mido", "audioread",
+          "torchcrepe", "pyphen"]  # vocal charting: pitch tracking, syllables
+# The tested PyTorch release for the NVIDIA, CPU and Linux AMD builds. torchvision is a dependency
+# of the separation library; torchaudio has the lyric aligner for vocal charting. Both must match torch.
+# (AMD's Windows build has no torchaudio, so vocal charting isn't available there.)
+TORCH = ["torch==2.11.0", "torchvision==0.26.0", "torchaudio==2.11.0"]
+# Bump when the packages change: the launchers re-run setup when the marker is older.
+SETUP_VERSION = 2
 WINDOWS = os.name == "nt"
 
 # AMD's PyTorch-on-Windows release (Python 3.12, Adrenalin driver 26.2.2 or newer).
@@ -84,7 +88,7 @@ def pins():
     """Exact versions of the installed PyTorch packages, so later installs can't swap them out."""
     importlib.invalidate_caches()
     out = []
-    for name in ("torch", "torchvision"):
+    for name in ("torch", "torchvision", "torchaudio"):
         try:
             out.append(f"{name}=={importlib.metadata.version(name)}")
         except importlib.metadata.PackageNotFoundError:
@@ -128,18 +132,42 @@ def check(device):
         return {"gpu": False, "name": None, "error": (res.stderr or "").strip()[-500:]}
 
 
+def read_marker():
+    try:
+        return json.loads(MARKER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def check_current():
+    """Exit 0 if setup finished with the current package list, else 1 (the launcher then re-runs setup)."""
+    marker = read_marker()
+    if marker is None:
+        sys.exit(1)
+    if marker.get("setup_version", 1) < SETUP_VERSION:
+        print("This version needs a few more packages; updating the setup...")
+        sys.exit(1)
+    sys.exit(0)
+
+
 def main():
+    if "--check" in sys.argv:
+        check_current()
     sys.stdout.reconfigure(line_buffering=True)  # show progress as it happens, even when piped
     uv = os.environ.get("UV") or shutil.which("uv")
     if not uv:
         sys.exit("uv not found")
+    previous, kept_fallback = read_marker(), None
     MARKER.unlink(missing_ok=True)
     device, why = detect()
+    if previous and previous.get("device") and not os.environ.get("STEMSEP_DEVICE"):
+        device, why = previous["device"], f"updating the existing {previous['device'].upper()} setup"
+        kept_fallback = previous.get("fallback_from")
     print(f"Hardware: {why} -> installing for {device.upper()} ({platform.system()})")
     install(uv, device)
     copy_ffmpeg()
     result = check(device)
-    fallback_from = None
+    fallback_from = kept_fallback
     if device == "amd" and not result.get("gpu"):
         # AMD's builds are extremely slow on the CPU, so swap in the normal CPU build instead.
         print("\nThe AMD build installed, but PyTorch can't use this GPU (unsupported card or driver):")
@@ -160,7 +188,8 @@ def main():
         print(f"GPU ready: {result['name']}")
     else:
         print("No supported GPU: splitting will run on the CPU (roughly 10-15 minutes per song).")
-    MARKER.write_text(json.dumps({"device": device, "reason": why, "fallback_from": fallback_from, **result},
+    MARKER.write_text(json.dumps({"device": device, "reason": why, "fallback_from": fallback_from,
+                                  "setup_version": SETUP_VERSION, **result},
                                  indent=1), encoding="utf-8")
 
 

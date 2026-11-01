@@ -22,6 +22,7 @@ from pathlib import Path
 
 import library
 import stemsplit
+import vocals
 
 ROOT = Path(__file__).resolve().parent
 
@@ -67,14 +68,48 @@ _job_ids = itertools.count(1)
 _remix_lock = threading.Lock()
 
 
-def _run_remix(job_id, staging, folder, fill, gate):
+def _run_job(job_id, work):
+    """Run work() -> staged folder name as a background job the page polls."""
     with _remix_lock:  # one at a time: each uses a few GB of RAM for long songs
         _jobs[job_id]["status"] = "running"
         try:
-            _jobs[job_id].update(status="done", folder=stemsplit.remix(staging / folder, fill, gate))
+            _jobs[job_id].update(status="done", folder=work())
         except Exception as e:
             traceback.print_exc()
-            _jobs[job_id].update(status="error", error=f"{type(e).__name__}: {e}")
+            _jobs[job_id].update(status="error", error=str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}")
+
+
+def start_job(work):
+    job_id = str(next(_job_ids))
+    _jobs[job_id] = {"status": "queued"}
+    threading.Thread(target=_run_job, args=(job_id, lambda: work(_jobs[job_id])), daemon=True).start()
+    return job_id
+
+
+_vocals_ok = None
+
+
+def vocals_available():
+    global _vocals_ok
+    if _vocals_ok is None:
+        ok, why = vocals.available()
+        _vocals_ok = {"ok": ok, "why": why}
+    return _vocals_ok
+
+
+def add_vocals(job, staging, folder, lyrics):
+    base = vocals.base_folder(staging, folder)
+    source = stemsplit.read_manifest(base)["source"]
+    with library.edit_state(staging) as state:  # kept so a re-split can offer them again
+        library.set_song(state, source, lyrics=lyrics, instrumental=False)
+    vocals.add_vocals(base, lyrics, log=lambda step: job.update(step=step))
+    return base.name
+
+
+def remove_vocals(job, staging, folder):
+    base = vocals.base_folder(staging, folder)
+    vocals.remove_vocals(base)
+    return base.name
 
 
 class QueueRunner:
@@ -197,7 +232,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return {"songs": songs, "state": state["songs"],
                 "cons_text": library.describe_cons(con_counts) if con_counts else "",
                 "con_backups": str(library.con_backup_dir(self.staging)),
-                "has_settings": bool(library.load_settings(self.staging)["roots"]), "queue_running": QUEUE.running}
+                "has_settings": bool(library.load_settings(self.staging)["roots"]), "queue_running": QUEUE.running,
+                "vocals": vocals_available()}
 
     # ------------------------------------------------------------ writes
     def do_POST(self):
@@ -215,10 +251,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 gate = None if gate is None else max(-60.0, min(0.0, float(gate)))
                 if not fill and gate is None:
                     raise ValueError("choose at least one option")
-                job_id = str(next(_job_ids))
-                _jobs[job_id] = {"status": "queued"}
-                threading.Thread(target=_run_remix, args=(job_id, self.staging, folder, fill, gate), daemon=True).start()
-                return self.send_json({"job": job_id})
+                return self.send_json({"job": start_job(lambda job: stemsplit.remix(self.staging / folder, fill, gate))})
+            if action == "vocals":
+                folder, lyrics = self.staged_folder(body.get("folder")), str(body.get("lyrics") or "")
+                if not lyrics.strip():
+                    raise ValueError("paste the lyrics first")
+                if len(lyrics) > 50000:
+                    raise ValueError("that's too long for one song's lyrics")
+                return self.send_json({"job": start_job(lambda job: add_vocals(job, self.staging, folder, lyrics))})
+            if action == "vocals/remove":
+                folder = self.staged_folder(body.get("folder"))
+                return self.send_json({"job": start_job(lambda job: remove_vocals(job, self.staging, folder))})
+            if action == "instrumental":
+                library.set_instrumental(self.staging, self.known_source(body.get("source")), body.get("value", True))
+                return self.send_json({"ok": True})
             if action == "commit":
                 record = library.commit(self.staging, self.staged_folder(body.get("folder")))
                 return self.send_json({"ok": True, "record": record})

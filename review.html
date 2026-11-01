@@ -77,6 +77,10 @@
   .folders li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-all; }
   input[type=text], select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   input[type=text] { flex: 1; min-width: 200px; }
+  textarea { font: inherit; width: 100%; min-height: 220px; padding: 8px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); resize: vertical; margin: 6px 0; }
+  .vocals ul { margin: 4px 0 8px; padding-left: 18px; }
+  .vocals li button { margin-right: 6px; }
   .browser { border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; }
   .browser .path { padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); word-break: break-all; }
   .browser .list { max-height: 240px; overflow: auto; }
@@ -150,7 +154,8 @@ function renderNav() {
   const songButtons = list => list.map(e => {
     const { base, variants } = groupsFor(e.source);
     const flags = e.flags || [];
-    let html = navButton(`song:${e.source}`, e.name, flags.length ? `<span class="warn">⚠ ${esc(flags.join("; "))}</span>` : kept(base));
+    let html = navButton(`song:${e.source}`, e.name, (flags.length ? `<span class="warn">⚠ ${esc(flags.join("; "))}</span>` : kept(base)) +
+      (vocalsUndecided(e, base) ? ` · <span class="warn">♪ no vocals charted</span>` : ""));
     for (const v of variants) html += navButton(`folder:${v.folder}`, `[${v.variant || v.song.slice(v.variant_of.length).trim().replace(/^\[|\]$/g, "")}]`,
       (v.flags || []).length ? `<span class="warn">⚠ ${v.flags.length} flag${v.flags.length > 1 ? "s" : ""}</span>` : kept(v), "variant");
     return html;
@@ -173,8 +178,14 @@ function renderNav() {
   updateReadyButton();
 }
 
+// No vocals charted and not marked as an instrumental: ask on the review page, and leave it out of "commit all".
+function vocalsUndecided(entry, base) {
+  return !!base && base.charted?.vocals === false && !entry.instrumental;
+}
+
 function readyCount() {
-  return Object.values(lib.state).filter(e => e.status === "split" && !(e.flags || []).length && e.staged).length;
+  return Object.entries(lib.state).filter(([source, e]) => e.status === "split" && !(e.flags || []).length && e.staged &&
+    !vocalsUndecided(e, groupsFor(source).base)).length;
 }
 
 function updateReadyButton() {
@@ -316,6 +327,7 @@ function render() {
     <div class="meta">${esc(s.model)} · split in ${s.seconds}s${isBench ? " · accuracy test: mix of the song's real stems" : ""}</div>
     ${flags.length ? `<div class="card flags"><b>Worth a closer listen</b><ul>${flags.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
       <div class="note">Try a variant below: “fill from other” gives an instrument the model's unclassified audio while it is charted.</div></div>` : ""}
+    ${isBench ? "" : vocalsCard(s)}
     <div class="card transport row">
       <button class="btn primary" id="play">Play</button>
       <span class="time" id="time">0:00 / ${fmt(duration)}</span>
@@ -339,7 +351,8 @@ function render() {
           <b>${esc(s.con.folder_name)}</b> next to it (stems, chart, song.ini and album art) and moves the CON file to the
           con-backups folder, so YARG doesn't list the song twice. You can undo it later. Skip leaves the CON file untouched.</p>`
         : `<p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
-          ${esc(s.song_file || "song.ogg")}.orig. You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>`}
+          ${esc(s.song_file || "song.ogg")}.orig${s.vocals_chart ? ". It also replaces notes.mid and song.ini with the versions that have the vocals, keeping the originals as .orig" : ""}.
+          You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>`}
         <div class="status-msg" id="decide-msg"></div>
       </div>
       <div class="card">
@@ -372,9 +385,94 @@ function render() {
     miss.onpointerdown = () => { missHeld = true; update(); };
     miss.onpointerup = miss.onpointerleave = () => { missHeld = false; update(); };
   }
-  if (!isBench) wireDecisions(s);
+  if (!isBench) { wireDecisions(s); wireVocals(s); }
   drawTimelines();
   update();
+}
+
+// ------------------------------------------------------------------ vocals from lyrics
+function vocalsCard(s) {
+  const entry = lib.state[s.source] || {}, vc = s.vocals_chart;
+  const seekList = (items, text) => items.map(x => `<li><button class="btn small" data-seek="${x[0]}">${fmt(x[0])}</button>${esc(text(x))}</li>`).join("");
+  const form = `<div id="lyrics-form" hidden>
+      <textarea id="lyrics" placeholder="Paste the lyrics here, one sung line per line.">${esc(vc?.lyrics || entry.lyrics || "")}</textarea>
+      <p class="note">Section labels like [Chorus] are ignored, and words in (parentheses) are treated as backing vocals and left out.
+        Write repeated sections out in full rather than “x2”. Takes about half a minute on a GPU (several minutes on the CPU); the first time,
+        the lyric alignment model (about 1.2 GB) is downloaded into the models folder.</p>
+      <div class="row"><button class="btn primary" id="chart-vocals">Chart vocals</button><button class="btn" id="lyrics-cancel">Cancel</button></div>
+    </div><div class="status-msg" id="vocals-msg"></div>`;
+  if (vc) {
+    return `<div class="card vocals"><b>Vocals charted from your lyrics</b>
+      <p style="margin:4px 0">${vc.notes} notes in ${vc.phrases} phrases, split out as vocals.ogg. Listen with the vocals soloed; the timeline shows
+        the charted notes against the singing.${(vc.notes_text || []).map(t => ` Note: ${esc(t)}.`).join("")}</p>
+      ${vc.unsure?.length ? `<div class="note">Worth checking (the alignment was less sure here):</div>
+        <ul>${seekList(vc.unsure.map(u => [u.time, u.text]), x => x[1])}</ul>` : ""}
+      ${vc.uncharted?.length ? `<div class="note">Singing with no lyrics charted (perhaps backing vocals, “oohs”, or lines missing from the lyrics):</div>
+        <ul>${seekList(vc.uncharted, x => ` to ${fmt(x[1])}`)}</ul>` : ""}
+      <div class="row"><button class="btn" id="lyrics-show">Edit lyrics and chart again</button><button class="btn danger" id="vocals-remove">Remove the generated vocals</button></div>
+      <p class="note">For fine-tuning, commit and open the chart in an editor such as Moonscraper or REAPER.</p>
+      ${form}</div>`;
+  }
+  if (s.charted?.vocals !== false) return "";
+  if (entry.instrumental) {
+    return `<div class="card vocals row"><span>Marked as an instrumental: any vocals stay in song.ogg.</span>
+      <button class="btn small" id="not-instrumental">It has vocals after all</button></div>`;
+  }
+  const level = s.stems?.vocals?.level_db;
+  const heard = level === undefined ? "" : level < -35 ? " The model heard almost no singing, so it's probably an instrumental."
+    : ` The model heard singing (${level} dB vs the mix), so the chart may just be missing its vocal part.`;
+  return `<div class="card vocals flags"><b>No vocals are charted for this song</b>
+    <p style="margin:4px 0 8px">If it has singing, paste the lyrics and the vocals are charted for you, then split out as vocals.ogg.${heard}</p>
+    ${lib.vocals?.ok ? "" : `<p class="note warn">${esc(lib.vocals?.why || "Vocal charting isn't available on this setup.")}</p>`}
+    <div class="row"><button class="btn primary" id="lyrics-show" ${lib.vocals?.ok ? "" : "disabled"}>Add vocals from lyrics…</button>
+      <button class="btn" id="instrumental">It's an instrumental</button></div>
+    ${form}</div>`;
+}
+
+async function waitJob(job, onStep) {
+  let st;
+  do {
+    await new Promise(r => setTimeout(r, 1500));
+    st = await (await fetch(`/api/job/${job}`)).json();
+    if (st.step && onStep) onStep(st.step);
+  } while (st.status === "queued" || st.status === "running");
+  if (st.status !== "done") throw new Error(st.error || "failed");
+  return st;
+}
+
+function wireVocals(s) {
+  const msg = (text, err) => { const m = $("#vocals-msg"); if (m) { m.textContent = text; m.className = `status-msg${err ? " err" : ""}`; } };
+  const busy = on => document.querySelectorAll(".vocals button, #commit, #skip, #build").forEach(b => b.disabled = on);
+  const run = async (action, body, working) => {
+    busy(true); stop(); msg(working);
+    try {
+      const { job } = await api(action, body);
+      await waitJob(job, step => msg(`${working} (${step}…)`));
+      await refresh(cur === s ? `song:${s.source}` : undefined);
+    } catch (err) { msg(err.message, true); busy(false); }
+  };
+  const setInstrumental = async value => {
+    try { await api("instrumental", { source: s.source, value }); await refresh(`song:${s.source}`); }
+    catch (err) { msg(err.message, true); }
+  };
+  document.querySelectorAll("[data-seek]").forEach(b => b.onclick = () => seek(+b.dataset.seek));
+  const show = $("#lyrics-show");
+  if (show) show.onclick = () => { $("#lyrics-form").hidden = false; show.hidden = true; $("#lyrics").focus(); };
+  const cancel = $("#lyrics-cancel");
+  if (cancel) cancel.onclick = () => { $("#lyrics-form").hidden = true; show.hidden = false; };
+  const chartBtn = $("#chart-vocals");
+  if (chartBtn) chartBtn.onclick = () => {
+    const lyrics = $("#lyrics").value;
+    if (!lyrics.trim()) return msg("Paste the lyrics first.", true);
+    run("vocals", { folder: s.folder, lyrics }, "Charting vocals");
+  };
+  const remove = $("#vocals-remove");
+  if (remove) remove.onclick = () => confirm("Remove the generated vocals? The vocals go back into song.ogg.") &&
+    run("vocals/remove", { folder: s.folder }, "Removing the generated vocals");
+  const inst = $("#instrumental");
+  if (inst) inst.onclick = () => setInstrumental(true);
+  const notInst = $("#not-instrumental");
+  if (notInst) notInst.onclick = () => setInstrumental(false);
 }
 
 function wireDecisions(s) {
@@ -504,7 +602,7 @@ function tick() {
 }
 
 document.addEventListener("keydown", e => {
-  if (!cur || e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if (!cur || e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT" && e.target.type !== "range") return;
   if (e.code === "Space") { e.preventDefault(); toggle(); }
   if (e.key === "a" || e.key === "A") setMode(mode === "original" ? "split" : "original");
   if ((e.key === "m" || e.key === "M") && !missHeld) { missHeld = true; update(); }
@@ -558,7 +656,8 @@ async function renderSetup() {
     <div class="card">
       <h3>Shortcuts</h3>
       <button class="btn" id="commit-ready"></button>
-      <p class="note">Commits the plain split of every song in “Ready to review” in one go (flagged songs are left for you to check).
+      <p class="note">Commits the plain split of every song in “Ready to review” in one go (flagged songs, and songs with no vocals charted
+        that you haven't marked as instrumentals, are left for you to check).
         Each can still be undone individually. Rescan songs in YARG afterwards.</p>
       <div class="status-msg" id="ready-msg"></div>
     </div>`;

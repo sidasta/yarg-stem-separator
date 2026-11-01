@@ -311,11 +311,26 @@ def cmd_queue(args):
         print("\nStopped. Run the same command again to carry on where it left off.")
 
 
+def vocals_undecided(entry, manifest):
+    """True when a staged split has no vocals charted and it hasn't been marked as an instrumental."""
+    return bool(manifest) and manifest.get("charted", {}).get("vocals") is False and not entry.get("instrumental")
+
+
+def set_instrumental(staging, source, value):
+    with edit_state(staging) as state:
+        set_song(state, source, instrumental=bool(value))
+
+
 def commit_ready(staging):
-    """Commit the plain split of every unflagged song waiting for review. Returns (committed, errors)."""
+    """Commit the plain split of every unflagged song waiting for review. Returns (committed, errors).
+
+    Songs with no vocals charted are left for review too, unless marked as instrumentals."""
     committed, errors = [], []
+    manifests = staged_folders(staging)
     for source, e in list(load_state(staging)["songs"].items()):
         if e.get("status") != "split" or e.get("flags") or not e.get("staged"):
+            continue
+        if vocals_undecided(e, manifests.get(e["staged"])):
             continue
         try:
             commit(staging, e["staged"])
@@ -367,6 +382,13 @@ def commit(staging, folder):
     clash = [n for n in new_files if n != song_file and (song_dir / n).exists()]
     if clash or stemsplit.existing_stems(song_dir):
         raise ValueError(f"song folder already has files that would be overwritten: {', '.join(clash or stemsplit.existing_stems(song_dir))}")
+    chart = _generated_chart(m)
+    if chart:
+        if not (song_dir / "notes.mid").exists() or _sha1(song_dir / "notes.mid") != m["vocals_chart"]["source_sha1"]:
+            raise ValueError("notes.mid has changed since the vocals were charted; add the vocals again")
+        old = [n + ".orig" for n, _ in chart if (song_dir / (n + ".orig")).exists()]
+        if old:
+            raise ValueError(f"{song_dir.name} already has {', '.join(old)}; move it out of the way first")
 
     # Copy to temporary names first, so a failure part-way leaves the song folder as it was.
     tmp = []
@@ -374,21 +396,45 @@ def commit(staging, folder):
         for name in new_files:
             shutil.copy2(staged / name, song_dir / (name + TMP_SUFFIX))
             tmp.append(name)
+        for name, src in chart:
+            shutil.copy2(src, song_dir / (name + TMP_SUFFIX))
+            tmp.append(name)
         song.rename(song_dir / backup)
     except Exception:
         for name in tmp:
             (song_dir / (name + TMP_SUFFIX)).unlink(missing_ok=True)
         raise
-    for name in new_files:
+    chart_backups = {}
+    for name, _ in chart:  # the song's own chart files are kept as .orig, like the audio
+        if (song_dir / name).exists():
+            os.replace(song_dir / name, song_dir / (name + ".orig"))
+            chart_backups[name] = name + ".orig"
+    for name in tmp:
         os.replace(song_dir / (name + TMP_SUFFIX), song_dir / name)
     record = {"committed": _now(), "variant": _variant_label(m), "model": m.get("model"),
               "files": [n for n in new_files if n != song_file], "replaced": song_file, "backup": backup}
+    if chart:
+        record["chart_backups"] = chart_backups
+        record["files"] += [n for n, _ in chart if n not in chart_backups]
     (song_dir / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     with edit_state(staging) as state:
         set_song(state, song_dir, status="committed", staged=None, variant=record["variant"],
                  files=record["files"], flags=m.get("flags", []))
     _remove_staged(staging, song_dir)
     return record
+
+
+CHART_FILES = ("notes.mid", "song.ini")
+
+
+def _generated_chart(m):
+    """[(file name, staged path)] of a chart made on the review page (vocals added), else []."""
+    if not m.get("vocals_chart"):
+        return []
+    files = [(n, Path(m["chart_dir"]) / n) for n in CHART_FILES if (Path(m["chart_dir"]) / n).exists()]
+    if not files:
+        raise ValueError("the generated vocal chart is missing; add the vocals again")
+    return files
 
 
 def _variant_label(m):
@@ -413,11 +459,12 @@ def _commit_con(staging, staged, m):
     building = target.with_name(target.name + TMP_SUFFIX)
     shutil.rmtree(building, ignore_errors=True)
     building.mkdir()
-    created = []
+    created, chart = [], dict(_generated_chart(m))
     try:
         for extra in ("notes.mid", "song.ini", "album.png"):
-            if (work / extra).exists():
-                shutil.copy2(work / extra, building / extra)
+            src = chart.get(extra, work / extra)
+            if src.exists():
+                shutil.copy2(src, building / extra)
                 created.append(extra)
         for p in sorted(staged.glob("*.ogg")):
             if not p.name.startswith("original."):
@@ -486,10 +533,17 @@ def undo(staging, source):
     backup, replaced = record.get("backup", "song.ogg.orig"), record.get("replaced", "song.ogg")
     if Path(backup).name != backup or Path(replaced).name != replaced or not (song_dir / backup).exists():
         raise ValueError(f"the backup of the original audio is missing in {song_dir.name}")
+    chart_backups = {n: b for n, b in record.get("chart_backups", {}).items()
+                     if n in CHART_FILES and b == n + ".orig"}
+    missing = [b for b in chart_backups.values() if not (song_dir / b).exists()]
+    if missing:
+        raise ValueError(f"the backup of the original chart is missing in {song_dir.name}: {', '.join(missing)}")
     for name in record["files"]:
         if Path(name).name == name:  # only plain file names from our own record
             (song_dir / name).unlink(missing_ok=True)
     os.replace(song_dir / backup, song_dir / replaced)
+    for name, bak in chart_backups.items():
+        os.replace(song_dir / bak, song_dir / name)
     record_path.unlink()
     with edit_state(staging) as state:
         set_song(state, song_dir, status="pending", staged=None, variant=None, files=None, flags=[])
