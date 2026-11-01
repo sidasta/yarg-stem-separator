@@ -229,8 +229,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         con_counts = {}
         for info in state.get("cons", {}).values():
             con_counts[info["status"]] = con_counts.get(info["status"], 0) + 1
+        skipped_cons = sorted(
+            ({"song": " - ".join(x for x in (info.get("artist"), info.get("name")) if x) or Path(path).name,
+              "file": path, "reason": info.get("reason", info["status"])}
+             for path, info in state.get("cons", {}).items() if info["status"] != "convertible"),
+            key=lambda c: c["song"].lower())
         return {"songs": songs, "state": state["songs"],
                 "cons_text": library.describe_cons(con_counts) if con_counts else "",
+                "skipped_cons": skipped_cons,
                 "con_backups": str(library.con_backup_dir(self.staging)),
                 "has_settings": bool(library.load_settings(self.staging)["roots"]), "queue_running": QUEUE.running,
                 "vocals": vocals_available()}
@@ -277,9 +283,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.send_json(list_dirs(body.get("path") or ""))
             if action == "scan":
                 s = library.load_settings(self.staging)
-                found, todo, cons = library.scan(s["roots"], self.staging, s["retry_failed"])
+                found, todo, cons, held = library.scan(s["roots"], self.staging, s["retry_failed"])
                 return self.send_json({"found": found, "todo": len(todo), "cons": cons,
-                                       "cons_text": library.describe_cons(cons) if cons else ""})
+                                       "cons_text": library.describe_cons(cons) if cons else "",
+                                       "held_text": library.describe_held(held)})
             if action == "queue/start":
                 QUEUE.start(self.staging, library.load_settings(self.staging))
                 return self.send_json({"ok": True})

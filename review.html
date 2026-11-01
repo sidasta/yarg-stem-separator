@@ -651,6 +651,10 @@ async function renderSetup() {
       <div class="status-msg" id="scan-msg"></div>
       <div id="q-status"></div>
       ${lib.cons_text ? `<p class="note">CON files found: ${esc(lib.cons_text)}. Encrypted CON audio is never decrypted.</p>` : ""}
+      ${(lib.skipped_cons || []).length ? `<details class="note"><summary style="text-transform:none;letter-spacing:0">Show the ${lib.skipped_cons.length} skipped CON file${lib.skipped_cons.length === 1 ? "" : "s"}</summary>
+        <table style="margin-top:6px"><thead><tr><th>Song</th><th>Why it was skipped</th><th>File</th></tr></thead><tbody>
+        ${lib.skipped_cons.map(c => `<tr><td>${esc(c.song)}</td><td>${esc(c.reason)}</td><td><code title="${esc(c.file)}">${esc(c.file.split(/[\\/]/).pop())}</code></td></tr>`).join("")}
+        </tbody></table></details>` : ""}
       <p class="note">${setup.device.gpu ? "Takes about 40–60 seconds per song on your GPU." : "On the CPU each song takes roughly 10–15 minutes, so larger libraries are best left running overnight."} You can review songs while it runs, close the page, or stop and start again later; it carries on where it left off.</p>
     </div>
     <div class="card">
@@ -682,6 +686,7 @@ async function renderSetup() {
       const r = await api("scan", {});
       msg("#scan-msg", `${r.found} song${r.found === 1 ? "" : "s"} with a single song audio file; ${r.todo} still to split` +
         (r.todo ? ` (about ${fmtMinutes(r.todo * (setup.device.minutes_per_song || 0.75))}).` : ".") +
+        (r.held_text ? ` Not splitting: ${r.held_text}.` : "") +
         (r.cons_text ? ` CON files: ${r.cons_text}.` : ""));
       refresh();
     } catch (err) { msg("#scan-msg", err.message, true); }

@@ -185,7 +185,8 @@ def save_settings(staging, settings):
 def scan(roots, staging, retry_failed=False):
     """Register newly found songs (folders and convertible CONs) as pending.
 
-    Returns (found count, list of sources to split, {CON status: count})."""
+    Returns (found count, list of sources to split, {CON status: count},
+    {status: [names]} for found songs that won't be split, e.g. ones you skipped)."""
     sync_staged(staging)
     found = list(find_songs(roots))
     cons = {}
@@ -210,8 +211,26 @@ def scan(roots, staging, retry_failed=False):
                 set_song(state, key, status="pending", kind="con", name=f"{info['artist']} - {info['name']}")
         todo = [Path(s) for s, e in state["songs"].items()
                 if e["status"] == "pending" or (retry_failed and e["status"] == "failed")]
+        # Found this time but not going to be split: say why, so the count isn't a mystery.
+        found_keys = [str(d) for d in found] + [k for k, v in state["cons"].items() if v["status"] == "convertible"]
+        held = {}
+        for key in found_keys:
+            e = state["songs"].get(key, {})
+            if e.get("status") in ("skipped", "split", "failed") and Path(key) not in todo:
+                held.setdefault(e["status"], []).append(e.get("name", Path(key).name))
     todo = [s for s in todo if (s.is_file() if str(s) in cons else stemsplit.song_audio(s))]
-    return len(found) + con_counts.get("convertible", 0), todo, con_counts
+    return len(found) + con_counts.get("convertible", 0), todo, con_counts, held
+
+
+def describe_held(held):
+    labels = {"skipped": ("you skipped earlier", "un-skip under Skipped on the left to split it"),
+              "split": ("already split and waiting for your review", ""),
+              "failed": ("failed before", "tick “Retry songs that failed before” to try again")}
+    parts = []
+    for status, names in sorted(held.items()):
+        label, hint = labels[status]
+        parts.append(f"{len(names)} {label} ({', '.join(sorted(names))})" + (f", {hint}" if hint else ""))
+    return "; ".join(parts)
 
 
 def _split_source(source, model, staging, entry):
@@ -243,11 +262,13 @@ def run_queue(roots, staging, model=stemsplit.DEFAULT_MODEL, retry_failed=False,
     progress(dict) is called before each song and at the end; should_stop() is checked between songs.
     """
     staging = Path(staging)
-    found, todo, con_counts = scan(roots, staging, retry_failed)
+    found, todo, con_counts, held = scan(roots, staging, retry_failed)
     if limit:
         todo = todo[:limit]
     names = {s: e.get("name", Path(s).name) for s, e in load_state(staging)["songs"].items()}
     log(f"Found {found} single-file songs; {len(todo)} to split now.")
+    if held:
+        log("Not splitting: " + describe_held(held))
     if con_counts:
         log("CON files: " + describe_cons(con_counts))
     stats = {"total": len(todo), "done": 0, "flagged": 0, "failed": 0, "current": None, "eta_min": None}
