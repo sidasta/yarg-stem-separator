@@ -6,6 +6,12 @@ Splits single-file YARG / Clone Hero songs (`song.ogg`, `.opus`, `.mp3` or `.wav
 (`vocals`, `guitar`, `rhythm` (bass), `drums`, `keys`) with the BS-Roformer-SW model,
 lets you listen and choose, then writes the result into the song folder (undoable).
 
+**New in v0.3.0: vocal charting from lyrics.** Songs whose chart has no vocals can get a
+vocal chart: paste the lyrics, and they're lined up with the separated vocal track and
+turned into notes at the sung pitch. It's a quick starting point, **not as accurate as
+charting by hand**, so check it and fine-tune in a chart editor if needed.
+See [Songs with no vocals charted](#songs-with-no-vocals-charted).
+
 ![Review page: per-track mute/solo, chart notes vs audio timelines, and commit/variant controls](docs/review-page.webp)
 
 - Only instruments charted in `song.ini` / `notes.mid` get a stem; the new `song.ogg`
@@ -19,7 +25,8 @@ lets you listen and choose, then writes the result into the song folder (undoabl
 - Rock Band CON packages are supported when they hold a single song whose audio is
   **unencrypted** and is one full mix in the backing track (common for customs that
   aren't multitrack). Encrypted CON audio is never decrypted; those, multi-song packs and
-  CONs that already have separate tracks are skipped and counted on the page.
+  CONs that already have separate tracks are skipped and listed on the page with the
+  reason, so you can see which ones need handling elsewhere.
 
 ## CON packages
 
@@ -69,7 +76,7 @@ The launcher detects your hardware and installs the matching version automatical
 |---|---|---|
 | **NVIDIA** graphics card | ~45 seconds | Tested (Windows); Linux untested |
 | **AMD Radeon** on Linux (recent RX 7000 / RX 9000) | GPU speed | Untested — uses PyTorch's official ROCm build |
-| **AMD Radeon** on Windows (recent RX 7000 / RX 9000) | GPU speed | **Experimental, untested** — uses AMD's PyTorch for Windows; needs AMD driver 26.2.2 or newer |
+| **AMD Radeon** on Windows (recent RX 7000 / RX 9000) | GPU speed | **Experimental, untested** — uses AMD's PyTorch for Windows; needs AMD driver 26.2.2 or newer; no vocal charting |
 | No supported graphics card (CPU only) | ~10–15 minutes | Tested (Windows); Linux checked automatically on every launcher change |
 
 If an AMD card is found but can't be used (older card or driver), the CPU version is
@@ -121,6 +128,11 @@ have). For AMD cards, the ROCm driver must already be installed (AMD supports Ub
   rescan songs in YARG.
 
 ### Songs with no vocals charted
+
+> **Accuracy:** this is automatic charting, so expect mistakes: notes can land slightly
+> early or late, fast or held syllables may be split oddly, and pitch can be off where the
+> singing is breathy, heavily effected or doubled. It gets you a playable chart quickly,
+> but it isn't as accurate as charting by hand.
 
 If a song's chart has no vocal part, its review page asks whether it's an instrumental.
 If it isn't, paste the lyrics and press **Chart vocals**:
