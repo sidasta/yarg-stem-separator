@@ -3,10 +3,12 @@
   lyrics -> forced alignment (torchaudio's MMS aligner) -> a time for every word and letter
   vocal stem -> pitch track (CREPE) -> one note per syllable, slides where the pitch moves
   notes -> snapped to the chart's own tempo map and written into a copy of notes.mid
+  (a notes.chart is converted to notes.mid first: a .chart has no way to store pitched vocals)
 
 Used by the review page for staged songs that have no vocals charted: add_vocals() charts
 them and re-assembles the staged split from its saved raw model outputs, so vocals.ogg is
-split out too. Nothing in the song folder changes until the split is committed.
+split out too. For songs committed earlier with a vocals.ogg, stage_committed() charts them
+from that file. Nothing in the song folder changes until the chart is committed.
 """
 
 import json
@@ -26,6 +28,7 @@ VOCAL_RANGE = (36, 84)  # pitches YARG / Rock Band accept for vocal notes
 PHRASE_NOTE, OVERDRIVE_NOTE = 105, 116
 ALIGN_MODEL_FILE = "mms-fa-model.pt"
 CHART_DIR = "chart"  # inside a staged folder: the generated notes.mid / song.ini
+MAX_DELAY_MS = 100  # song.ini delay / .chart Offset small enough for vocal notes to ignore
 
 
 def available():
@@ -322,9 +325,11 @@ def vocal_track(notes, overdrive_every=4):
     return track, len(lines)
 
 
-def write_song_ini(src, dst):
-    """Copy song.ini with diff_vocals set, keeping its formatting and line endings."""
-    raw = src.read_bytes()
+def write_song_ini(src, dst, extra=None):
+    """Copy song.ini with diff_vocals set, keeping its formatting and line endings.
+
+    extra: {key: value} to add, for settings song.ini doesn't have yet (made from scratch if src is missing)."""
+    raw = src.read_bytes() if src.exists() else b"[song]\r\n"
     nl = b"\r\n" if b"\r\n" in raw else b"\n"
     lines = raw.decode("utf-8-sig", errors="replace").splitlines()
     found = False
@@ -334,24 +339,47 @@ def write_song_ini(src, dst):
             found = True
             if m.group(1) is None or int(m.group(1)) < 0:
                 lines[i] = "diff_vocals = 2"
-    if not found:
+    add = ([] if found else ["diff_vocals = 2"]) + [f"{k} = {v}" for k, v in (extra or {}).items()]
+    if add:
         head = next((i for i, line in enumerate(lines) if line.strip().lower() == "[song]"), None)
         if head is None:
             lines[:0] = ["[song]"]
             head = 0
-        lines.insert(head + 1, "diff_vocals = 2")
+        lines[head + 1:head + 1] = add
     dst.write_bytes(nl.join(s.encode("utf-8") for s in lines) + nl)
 
 
+def delay_ms(chart_src):
+    """How far the chart is shifted against the audio: song.ini's delay, else a .chart's Offset."""
+    import chartfile
+    try:
+        return float(chartfile.ini_values(Path(chart_src) / "song.ini")["delay"])
+    except (KeyError, ValueError):
+        pass
+    src = stemsplit.chart_file(chart_src)
+    return chartfile.parse(src).offset * 1000 if src is not None and src.suffix == ".chart" else 0.0
+
+
 def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
-    """Write out_dir/notes.mid (chart_src's notes.mid plus PART VOCALS) and song.ini. Returns a report."""
-    import mido
+    """Write out_dir/notes.mid (chart_src's chart plus PART VOCALS) and song.ini. Returns a report.
+
+    A notes.chart is converted to notes.mid; song.ini gains any settings the conversion needs."""
+    import chartfile
     lines, notes_text = parse_lyrics(lyrics)
     if not lines:
         raise ValueError("no lyrics to chart: paste the words, one sung line per line")
-    src_mid = Path(chart_src) / "notes.mid"
-    if not src_mid.exists():
-        raise ValueError("vocals can only be added to songs charted in notes.mid (this one has no notes.mid)")
+    chart_src = Path(chart_src)
+    src = stemsplit.chart_file(chart_src)
+    if src is None:
+        raise ValueError("this song has no notes.mid or notes.chart to add the vocals to")
+    delay = delay_ms(chart_src)
+    if abs(delay) >= MAX_DELAY_MS:
+        raise ValueError(f"this song's chart is shifted {delay:g} ms against its audio (song.ini's delay or the "
+                         ".chart's Offset), which vocal charting can't allow for yet")
+    extra = {}
+    if src.suffix == ".chart":
+        extra = chartfile.ini_additions(chartfile.parse(src), chartfile.ini_values(chart_src / "song.ini"))
+    mid = stemsplit.load_chart(chart_src)
     dev = device()
     x = to_16k_mono(vocal_audio, sr)
     log("aligning lyrics")
@@ -360,7 +388,6 @@ def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
     midi, voiced = track_pitch(x, dev)
     events = syllable_notes(aligned, midi, voiced)
 
-    mid = mido.MidiFile(str(src_mid), clip=True)
     grid = mid.ticks_per_beat // GRID_DIVISION
     notes = quantise(events, seconds_to_ticks(mid), grid)
     track, phrases = vocal_track(notes)
@@ -371,8 +398,8 @@ def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     mid.save(str(out_dir / "notes.mid"))
-    if (Path(chart_src) / "song.ini").exists():
-        write_song_ini(Path(chart_src) / "song.ini", out_dir / "song.ini")
+    if (chart_src / "song.ini").exists() or extra:
+        write_song_ini(chart_src / "song.ini", out_dir / "song.ini", extra)
 
     # Where to look first when checking: lines the aligner was unsure of, and singing with no lyrics.
     unsure = []
@@ -403,6 +430,7 @@ def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
             merged.append([a, b])
     merged = [[round(a, 1), round(b, 1)] for a, b in merged if b - a >= 1]
     return {"lyrics": lyrics, "notes": len(notes), "phrases": phrases, "lines": len(lines),
+            "source_file": src.name, "ini_added": extra,
             "pitch_range": [min(n[2] for n in notes), max(n[2] for n in notes)],
             "unsure": unsure, "uncharted": merged, "notes_text": notes_text}
 
@@ -456,7 +484,7 @@ def add_vocals(staged, lyrics, log=print):
         raise ValueError("the model produced no vocal track for this song")
     audio, sr = stemsplit.read_audio(vocal_path)
     report = chart(audio, sr, lyrics, chart_src, staged / CHART_DIR, log)
-    report["source_sha1"] = _sha1(chart_src / "notes.mid")
+    report["source_sha1"] = _sha1(chart_src / report["source_file"])
     log("re-assembling the split with vocals")
     return _restage(staged, m, {**m["charted"], "vocals": True}, staged / CHART_DIR,
                     {"chart_source": str(chart_src), "vocals_chart": report})
@@ -472,6 +500,64 @@ def remove_vocals(staged):
     report = _restage(staged, m, stemsplit.charted_instruments(chart_src), chart_src, {})
     shutil.rmtree(staged / CHART_DIR, ignore_errors=True)
     return report
+
+
+def stage_committed(song_dir, staged, lyrics, source=None, original=None, log=print):
+    """Chart vocals for a song committed earlier, from the vocals.ogg in its folder.
+
+    Stages the new chart (manifest kind "vocals") with copies of the song's tracks to listen
+    to; library.commit_vocals() writes the chart into the song folder. original: the backup
+    of the song's original audio, if there is one. Returns the manifest."""
+    ok, why = available()
+    if not ok:
+        raise ValueError(why)
+    song_dir, staged = Path(song_dir), Path(staged)
+    if not (song_dir / "vocals.ogg").exists():
+        raise ValueError("this song has no vocals.ogg to chart the vocals from")
+    names = {yarg for yarg, _, _ in stemsplit.STEM_MAP.values()} | {"song"}
+    tracks = {p.stem: p for p in sorted(song_dir.glob("*.ogg")) if p.stem in names}
+    if staged.exists():
+        shutil.rmtree(staged)
+    staged.mkdir(parents=True)
+    try:
+        audio, sr = stemsplit.read_audio(song_dir / "vocals.ogg")
+        report = chart(audio, sr, lyrics, song_dir, staged / CHART_DIR, log)
+        report["source_sha1"] = _sha1(song_dir / report["source_file"])
+        log("preparing the review")
+        data = {n: stemsplit.read_audio(p)[0] for n, p in tracks.items()}
+        frames, channels = max(len(x) for x in data.values()), max(x.shape[1] for x in data.values())
+        data = {n: stemsplit.fit_length(x, frames, channels) for n, x in data.items()}
+        mix = sum(data.values())
+        mix_db = stemsplit.rms_db(mix)
+        spans = stemsplit.chart_spans(staged / CHART_DIR)
+        stems = {}
+        for stem, (yarg, _, _) in stemsplit.STEM_MAP.items():
+            if yarg not in data:
+                stems[stem] = {"file": yarg, "kept": False, "reason": f"no {yarg}.ogg in the song folder"}
+                continue
+            stems[stem] = {"file": yarg, "kept": True, "level_db": round(stemsplit.rms_db(data[yarg]) - mix_db, 1)}
+            if stem in spans:
+                stems[stem]["chart_coverage"] = stemsplit.coverage(stemsplit.activity(data[yarg], mix, sr), spans[stem])
+        stems["other"] = {"file": "song", "kept": True, "reason": "the song's own song.ogg"}
+        for p in tracks.values():
+            shutil.copy2(p, staged / p.name)
+        if original and Path(original).exists():
+            original_file = "original" + Path(Path(original).stem).suffix  # song.opus.orig -> original.opus
+            shutil.copy2(original, staged / original_file)
+        else:
+            original_file = "original.ogg"
+            stemsplit.write_ogg(staged / original_file, mix, sr)
+        manifest = {"kind": "vocals", "song": song_dir.name, "source": str(source or song_dir),
+                    "song_dir": str(song_dir), "chart_dir": str(staged / CHART_DIR), "chart_source": str(song_dir),
+                    "vocals_chart": report, "charted": stemsplit.charted_instruments(staged / CHART_DIR),
+                    "stems": stems, "chart": {stemsplit.STEM_MAP[s][0]: v for s, v in spans.items()},
+                    "activity": {n: stemsplit.activity(x, mix, sr) for n, x in data.items()},
+                    "flags": [], "original_file": original_file}
+        (staged / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    except BaseException:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+    return manifest
 
 
 def _sha1(path):

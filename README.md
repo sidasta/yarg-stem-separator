@@ -10,12 +10,14 @@ lets you listen and choose, then writes the result into the song folder (undoabl
 vocal chart: paste the lyrics, and they're lined up with the separated vocal track and
 turned into notes at the sung pitch. It's a quick starting point, **not as accurate as
 charting by hand**, so check it and fine-tune in a chart editor if needed.
-See [Songs with no vocals charted](#songs-with-no-vocals-charted).
+See [Songs with no vocals charted](#songs-with-no-vocals-charted). This also works for
+`notes.chart` songs (converted to `notes.mid`), including ones already committed.
 
 ![Review page: per-track mute/solo, chart notes vs audio timelines, and commit/variant controls](docs/review-page.webp)
 
-- Only instruments charted in `song.ini` / `notes.mid` get a stem; the new `song.ogg`
-  is everything else, so all files played together reproduce the original.
+- Only instruments with notes in the chart (`notes.mid` or `notes.chart`) get a stem,
+  unless `song.ini` marks them as not charted (difficulty -1); the new `song.ogg` is
+  everything else, so all files played together reproduce the original.
 - Nothing in your library changes until you press **Commit**.
 - It only works on audio you already have; it doesn't download songs or audio of any kind.
 - Runs on Windows and Linux. The separation is done by an AI model, which is fastest on a
@@ -149,9 +151,45 @@ If it isn't, paste the lyrics and press **Chart vocals**:
   fine-tuning, commit and open it in a chart editor.
 - Commit also replaces `notes.mid` and `song.ini` (vocal difficulty set), keeping the
   originals as `notes.mid.orig` and `song.ini.orig`; undo puts them back.
+- **`notes.chart` songs:** a `.chart` can't hold sung vocals, so the chart is converted
+  to `notes.mid` with the vocals added, and `notes.chart` is kept as `notes.chart.orig`
+  (with both in the folder, the game would read only one). If the `.chart` has its own
+  lyric events, the lyrics box starts with them; check them against the song. See
+  [notes.chart songs](#noteschart-songs) for what the conversion keeps.
 - The first time, the lyric alignment model (about 1.2 GB) is downloaded into `models/`.
-  Only songs charted in `notes.mid` are supported (not `notes.chart`), and it isn't
-  available with AMD's experimental Windows PyTorch, which has no torchaudio.
+  It isn't available with AMD's experimental Windows PyTorch, which has no torchaudio.
+  Songs whose chart is shifted against the audio by 100 ms or more (`delay` in
+  `song.ini`, or the `.chart`'s `Offset`) aren't supported yet.
+
+**Songs committed before their chart could be read** (e.g. `notes.chart` songs split with
+an earlier version) may have a `vocals.ogg` but no vocal part. They're listed under
+**Committed, no vocals charted**: paste the lyrics, and the vocals are charted from that
+`vocals.ogg` and staged for you to listen to. Committing writes only the chart files
+(the originals kept as `.orig`, as above). **Remove the charted vocals** takes them back
+out, and undoing the song's whole commit removes them too. Each library scan checks
+committed songs for this.
+
+### notes.chart songs
+
+Songs charted in `notes.chart` (Moonscraper / Clone Hero format) are read directly: their
+notes decide which instruments get a stem and fill the timelines. When vocals are added,
+the chart is converted to `notes.mid`. Every note keeps its timing and type (strum, HOPO,
+tap, open; cymbal or tom, accent, ghost, 2x kick), along with sustains, star power, solos,
+drum fills and sections. This was checked against the original `.chart` files with
+[scan-chart](https://github.com/Geomitron/scan-chart) on 20 songs, all identical to
+within 0.2 ms. Where `notes.mid` can't say something, `song.ini` gains a setting (for
+example `sustain_cutoff_threshold`, so short sustains survive, and song details that were
+only in the `.chart`). Two things `notes.mid` can't store: star power and drum fills that
+differ per difficulty (every difficulty gets Expert's), and the `.chart`'s lyric events
+(replaced by the charted vocals).
+
+To convert a chart by hand:
+
+```bash
+.venv/Scripts/python.exe chartfile.py "<song folder>/notes.chart" "<song folder>/notes.mid"
+```
+
+It prints any `song.ini` settings to add. Then move `notes.chart` out of the folder.
 
 Songs that already have stems are never touched. Staging takes about 60–90 MB per song
 until it is committed or skipped (`staging/`).

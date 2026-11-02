@@ -106,7 +106,7 @@ const RAW_ORDER = ["vocals", "guitar", "bass", "drums", "piano", "other"];
 const FILL_ORDER = ["guitar", "piano", "bass", "vocals", "drums"];  // priority where charted sections overlap
 const FILL_LABEL = { guitar: "Guitar", piano: "Keys", bass: "Bass", vocals: "Vocals", drums: "Drums" };
 
-let ctx, lib = { songs: [], state: {} }, cur = null, curKey = null, reviewOrder = [];
+let ctx, lib = { songs: [], state: {} }, cur = null, curKey = null, reviewOrder = [], vocalsCheckTimer = null;
 let buffers = {}, sources = [], gains = {}, duration = 0, startedAt = 0, offset = 0, playing = false;
 let mode = "split", mute = {}, solo = {}, vol = {}, missHeld = false;
 
@@ -129,6 +129,8 @@ async function refresh(selectKey) {
   lib = await (await fetch("/api/library")).json();
   for (const s of lib.songs) { s.raw = s.raw || []; s.truth = s.truth || []; }
   renderNav();
+  // Committed songs are being checked for missing vocals in the background: show them as they're found.
+  if (lib.vocals_checking && !vocalsCheckTimer) vocalsCheckTimer = setTimeout(() => { vocalsCheckTimer = null; refresh(); }, 3000);
   if (selectKey !== undefined) selectByKey(selectKey);
 }
 
@@ -145,11 +147,13 @@ function renderNav() {
   const flagged = split.filter(e => (e.flags || []).length), clean = split.filter(e => !(e.flags || []).length);
   const committed = by("committed"), skipped = by("skipped"), failed = by("failed"), pending = by("pending");
   const benches = lib.songs.filter(s => s.kind === "bench");
+  const vocalsTodo = committed.filter(e => (e.needs_vocals && !e.instrumental) || draftFor(e.source));
   reviewOrder = [...flagged, ...clean].map(e => `song:${e.source}`);
   queueRunning = lib.queue_running;
   $("#summary").textContent = (queueRunning ? "Splitting in progress… · " : "") +
     `${split.length} to review (${flagged.length} flagged) · ${committed.length} committed · ` +
-    `${skipped.length} skipped · ${pending.length} waiting to split${failed.length ? ` · ${failed.length} failed` : ""}`;
+    `${skipped.length} skipped · ${pending.length} waiting to split${failed.length ? ` · ${failed.length} failed` : ""}` +
+    (vocalsTodo.length ? ` · ${vocalsTodo.length} committed with no vocals charted` : "");
 
   const songButtons = list => list.map(e => {
     const { base, variants } = groupsFor(e.source);
@@ -165,6 +169,8 @@ function renderNav() {
   $("#songs").innerHTML =
     section("Needs a closer listen", flagged.length, songButtons(flagged)) +
     section("Ready to review", clean.length, songButtons(clean)) +
+    section("Committed, no vocals charted", vocalsTodo.length, simple(vocalsTodo, e => draftFor(e.source)
+      ? "♪ vocals charted, waiting for you to commit" : `<span class="warn">♪ has vocals.ogg, no vocal part</span>`)) +
     section("Failed", failed.length, simple(failed, e => `<span class="warn">${esc(e.error || "")}</span>`)) +
     section("Committed", committed.length, simple(committed, e => esc(e.variant || "")), false) +
     section("Skipped", skipped.length, simple(skipped, () => ""), false) +
@@ -176,6 +182,11 @@ function renderNav() {
     b.classList.toggle("active", b.dataset.key === curKey);
   });
   updateReadyButton();
+}
+
+// A vocal chart staged for a song committed earlier (see library.stage_committed_vocals).
+function draftFor(source) {
+  return lib.songs.find(s => s.kind === "vocals" && s.source === source);
 }
 
 // No vocals charted and not marked as an instrumental: ask on the review page, and leave it out of "commit all".
@@ -220,6 +231,8 @@ function selectByKey(key) {
     const { base } = groupsFor(source);
     return base ? loadStaged(base) : selectByKey(null);
   }
+  const draft = entry.status === "committed" && draftFor(source);
+  if (draft) return loadStaged(draft);
   stop(); cur = null;
   renderEntry(source, entry);
 }
@@ -247,7 +260,8 @@ function renderEntry(source, e) {
     pending: `<p>Waiting to be split. Run the queue command to process it.</p>`,
   };
   $("#main").innerHTML = `<h2>${esc(e.name)}</h2><div class="meta">${esc(source)}</div><div class="card">${actions[e.status] || ""}
-    <div class="status-msg" id="msg"></div></div>`;
+    <div class="status-msg" id="msg"></div></div>${e.status === "committed" ? committedVocalsCard(source, e) : ""}`;
+  if (e.status === "committed") wireVocals({ source, kind: "committed" });
   const act = $("#act");
   if (!act) return;
   act.onclick = async () => {
@@ -298,8 +312,36 @@ function trackRow(name, label, statusHtml, info, group, chart, act) {
     <td class="tl"><canvas class="tl" data-chart='${JSON.stringify(chart || [])}' data-act='${JSON.stringify(act || [])}'></canvas></td></tr>`;
 }
 
+function decideCard(s, added, songFolder) {
+  const vc = s.vocals_chart, fromChart = vc?.source_file === "notes.chart";
+  const chartNote = !vc ? "" : fromChart
+    ? `adds notes.mid (converted from notes.chart, with the vocals) and replaces song.ini, keeping the originals as
+       song.ini.orig and notes.chart.orig (so the game doesn't read the .chart instead)`
+    : "replaces notes.mid and song.ini with the versions that have the vocals, keeping the originals as .orig";
+  if (s.kind === "vocals") {
+    return `<div class="card">
+      <h3>Decide</h3>
+      <div class="row"><button class="btn primary" id="commit">Commit the vocal chart</button><button class="btn" id="skip">Discard</button></div>
+      <p class="note">Commit ${chartNote} in <b>${esc(songFolder)}</b>. The audio files aren't touched.
+        You can take the vocals back out later, and undoing the song's whole commit removes them too.</p>
+      <div class="status-msg" id="decide-msg"></div>
+    </div>`;
+  }
+  return `<div class="card">
+        <h3>Decide</h3>
+        <div class="row"><button class="btn primary" id="commit">Commit this version</button><button class="btn" id="skip">Skip song</button></div>
+        ${s.con ? `<p class="note">This song came from the CON file <b>${esc(songFolder)}</b>. Commit creates the folder
+          <b>${esc(s.con.folder_name)}</b> next to it (stems, chart, song.ini and album art) and moves the CON file to the
+          con-backups folder, so YARG doesn't list the song twice. You can undo it later. Skip leaves the CON file untouched.</p>`
+        : `<p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
+          ${esc(s.song_file || "song.ogg")}.orig${vc ? `. It also ${chartNote}` : ""}.
+          You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>`}
+        <div class="status-msg" id="decide-msg"></div>
+      </div>`;
+}
+
 function render() {
-  const s = cur, isBench = s.kind === "bench";
+  const s = cur, isBench = s.kind === "bench", isDraft = s.kind === "vocals";
   const act = s.activity || {}, chart = s.chart || {};
   const rows = ORDER.map(name => {
     const e = s.stems[STEM_OF[name]] || {};
@@ -320,11 +362,12 @@ function render() {
   const flags = s.flags || [];
   const fillable = FILL_ORDER.filter(st => s.charted && s.charted[st] && s.raw.includes("other"));
   const added = s.files.filter(f => !["original", "song"].includes(f));
-  const songFolder = (s.source || "").split(/[\\/]/).pop();
+  const songFolder = (s.song_dir || s.source || "").split(/[\\/]/).pop();
 
   $("#main").innerHTML = `
     <h2>${esc(s.song)}</h2>
-    <div class="meta">${esc(s.model)} · split in ${s.seconds}s${isBench ? " · accuracy test: mix of the song's real stems" : ""}</div>
+    <div class="meta">${isDraft ? "Committed earlier · vocals charted from its vocals.ogg, waiting for you to commit the chart"
+      : `${esc(s.model)} · split in ${s.seconds}s${isBench ? " · accuracy test: mix of the song's real stems" : ""}`}</div>
     ${flags.length ? `<div class="card flags"><b>Worth a closer listen</b><ul>${flags.map(f => `<li>${esc(f)}</li>`).join("")}</ul>
       <div class="note">Try a variant below: “fill from other” gives an instrument the model's unclassified audio while it is charted.</div></div>` : ""}
     ${isBench ? "" : vocalsCard(s)}
@@ -343,18 +386,8 @@ function render() {
     </div>
     <table><thead><tr><th>Track</th><th>Status</th><th></th><th>Volume</th><th>Chart notes vs audio</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="legend">Timeline:<i style="background:var(--chart)"></i>charted notes<i style="background:var(--audio)"></i>audio in this track (brighter = louder)</p>
-    ${isBench ? "" : `<div class="grid2">
-      <div class="card">
-        <h3>Decide</h3>
-        <div class="row"><button class="btn primary" id="commit">Commit this version</button><button class="btn" id="skip">Skip song</button></div>
-        ${s.con ? `<p class="note">This song came from the CON file <b>${esc(songFolder)}</b>. Commit creates the folder
-          <b>${esc(s.con.folder_name)}</b> next to it (stems, chart, song.ini and album art) and moves the CON file to the
-          con-backups folder, so YARG doesn't list the song twice. You can undo it later. Skip leaves the CON file untouched.</p>`
-        : `<p class="note">Commit adds ${esc(added.join(", "))} to <b>${esc(songFolder)}</b> and replaces ${esc(s.song_file || "song.ogg")}, keeping the original as
-          ${esc(s.song_file || "song.ogg")}.orig${s.vocals_chart ? ". It also replaces notes.mid and song.ini with the versions that have the vocals, keeping the originals as .orig" : ""}.
-          You can undo it later. Skip leaves the song folder untouched. Either way, staged files for this song are cleared.</p>`}
-        <div class="status-msg" id="decide-msg"></div>
-      </div>
+    ${isBench ? "" : isDraft ? decideCard(s, added, songFolder) : `<div class="grid2">
+      ${decideCard(s, added, songFolder)}
       <div class="card">
         <h3>Make a variant</h3>
         ${fillable.length ? `<div class="note">Fill from the model's “other” output while charted:</div>
@@ -391,25 +424,58 @@ function render() {
 }
 
 // ------------------------------------------------------------------ vocals from lyrics
-function vocalsCard(s) {
-  const entry = lib.state[s.source] || {}, vc = s.vocals_chart;
-  const seekList = (items, text) => items.map(x => `<li><button class="btn small" data-seek="${x[0]}">${fmt(x[0])}</button>${esc(text(x))}</li>`).join("");
-  const form = `<div id="lyrics-form" hidden>
-      <textarea id="lyrics" placeholder="Paste the lyrics here, one sung line per line.">${esc(vc?.lyrics || entry.lyrics || "")}</textarea>
+function lyricsForm(source, saved) {
+  const fromChart = !saved && lib.chart_lyrics?.[source];
+  return `<div id="lyrics-form" hidden>
+      <textarea id="lyrics" placeholder="Paste the lyrics here, one sung line per line.">${esc(saved || fromChart || "")}</textarea>
+      ${fromChart ? `<p class="note warn">The box starts with the lyrics from the chart's own lyric events: check them against the song,
+        and write numbers out as words.</p>` : ""}
       <p class="note">Section labels like [Chorus] are ignored, and words in (parentheses) are treated as backing vocals and left out.
         Write repeated sections out in full rather than “x2”. Takes about half a minute on a GPU (several minutes on the CPU); the first time,
         the lyric alignment model (about 1.2 GB) is downloaded into the models folder.</p>
       <div class="row"><button class="btn primary" id="chart-vocals">Chart vocals</button><button class="btn" id="lyrics-cancel">Cancel</button></div>
     </div><div class="status-msg" id="vocals-msg"></div>`;
+}
+
+const CHART_NOTE = "A notes.chart can't hold sung vocals, so the song gets a notes.mid converted from it, with the vocals added.";
+
+// Songs committed before their chart could be read: vocals.ogg is there, the chart has no vocal part.
+function committedVocalsCard(source, e) {
+  if (e.vocals_added) {
+    return `<div class="card vocals"><b>Vocals charted from your lyrics</b>
+      <p style="margin:4px 0 8px">Added after the song was committed. The song's own chart files are kept as <code>.orig</code>.</p>
+      <button class="btn danger" id="vocals-undo">Remove the charted vocals</button><div class="status-msg" id="vocals-msg"></div></div>`;
+  }
+  if (!e.needs_vocals) return "";
+  if (e.instrumental) {
+    return `<div class="card vocals row"><span>Marked as an instrumental: vocals.ogg stays, with no vocal part charted.</span>
+      <button class="btn small" id="not-instrumental">It has vocals after all</button></div>`;
+  }
+  const isChart = (e.vocals_checked || [])[0] === "notes.chart";
+  return `<div class="card vocals flags"><b>No vocals are charted for this song</b>
+    <p style="margin:4px 0 8px">It was split before its chart could be read, so it has a vocals.ogg but no vocal part.
+      Paste the lyrics and the vocals are charted from vocals.ogg; you can listen and check them before anything in the song folder changes.
+      ${isChart ? CHART_NOTE : ""}</p>
+    ${lib.vocals?.ok ? "" : `<p class="note warn">${esc(lib.vocals?.why || "Vocal charting isn't available on this setup.")}</p>`}
+    <div class="row"><button class="btn primary" id="lyrics-show" ${lib.vocals?.ok ? "" : "disabled"}>Add vocals from lyrics…</button>
+      <button class="btn" id="instrumental">It's an instrumental</button></div>
+    ${lyricsForm(source, e.lyrics)}</div>`;
+}
+
+function vocalsCard(s) {
+  const entry = lib.state[s.source] || {}, vc = s.vocals_chart;
+  const seekList = (items, text) => items.map(x => `<li><button class="btn small" data-seek="${x[0]}">${fmt(x[0])}</button>${esc(text(x))}</li>`).join("");
+  const form = lyricsForm(s.source, vc?.lyrics || entry.lyrics);
   if (vc) {
     return `<div class="card vocals"><b>Vocals charted from your lyrics</b>
-      <p style="margin:4px 0">${vc.notes} notes in ${vc.phrases} phrases, split out as vocals.ogg. Listen with the vocals soloed; the timeline shows
-        the charted notes against the singing.${(vc.notes_text || []).map(t => ` Note: ${esc(t)}.`).join("")}</p>
+      <p style="margin:4px 0">${vc.notes} notes in ${vc.phrases} phrases${s.kind === "vocals" ? ", from the song's vocals.ogg" : ", split out as vocals.ogg"}.
+        Listen with the vocals soloed; the timeline shows the charted notes against the singing.${(vc.notes_text || []).map(t => ` Note: ${esc(t)}.`).join("")}</p>
       ${vc.unsure?.length ? `<div class="note">Worth checking (the alignment was less sure here):</div>
         <ul>${seekList(vc.unsure.map(u => [u.time, u.text]), x => x[1])}</ul>` : ""}
       ${vc.uncharted?.length ? `<div class="note">Singing with no lyrics charted (perhaps backing vocals, “oohs”, or lines missing from the lyrics):</div>
         <ul>${seekList(vc.uncharted, x => ` to ${fmt(x[1])}`)}</ul>` : ""}
-      <div class="row"><button class="btn" id="lyrics-show">Edit lyrics and chart again</button><button class="btn danger" id="vocals-remove">Remove the generated vocals</button></div>
+      <div class="row"><button class="btn" id="lyrics-show">Edit lyrics and chart again</button>${s.kind === "vocals" ? ""
+        : `<button class="btn danger" id="vocals-remove">Remove the generated vocals</button>`}</div>
       <p class="note">For fine-tuning, commit and open the chart in an editor such as Moonscraper or REAPER.</p>
       ${form}</div>`;
   }
@@ -422,7 +488,8 @@ function vocalsCard(s) {
   const heard = level === undefined ? "" : level < -35 ? " The model heard almost no singing, so it's probably an instrumental."
     : ` The model heard singing (${level} dB vs the mix), so the chart may just be missing its vocal part.`;
   return `<div class="card vocals flags"><b>No vocals are charted for this song</b>
-    <p style="margin:4px 0 8px">If it has singing, paste the lyrics and the vocals are charted for you, then split out as vocals.ogg.${heard}</p>
+    <p style="margin:4px 0 8px">If it has singing, paste the lyrics and the vocals are charted for you, then split out as vocals.ogg.${heard}
+      ${s.chart_file === "notes.chart" ? CHART_NOTE : ""}</p>
     ${lib.vocals?.ok ? "" : `<p class="note warn">${esc(lib.vocals?.why || "Vocal charting isn't available on this setup.")}</p>`}
     <div class="row"><button class="btn primary" id="lyrics-show" ${lib.vocals?.ok ? "" : "disabled"}>Add vocals from lyrics…</button>
       <button class="btn" id="instrumental">It's an instrumental</button></div>
@@ -440,15 +507,17 @@ async function waitJob(job, onStep) {
   return st;
 }
 
+// s: a staged split or vocal chart, or {source, kind: "committed"} for a committed song's page.
 function wireVocals(s) {
   const msg = (text, err) => { const m = $("#vocals-msg"); if (m) { m.textContent = text; m.className = `status-msg${err ? " err" : ""}`; } };
   const busy = on => document.querySelectorAll(".vocals button, #commit, #skip, #build").forEach(b => b.disabled = on);
-  const run = async (action, body, working) => {
+  const here = () => cur === s || (s.kind === "committed" && curKey === `song:${s.source}`);
+  const run = async (action, body, working, job = true) => {
     busy(true); stop(); msg(working);
     try {
-      const { job } = await api(action, body);
-      await waitJob(job, step => msg(`${working} (${step}…)`));
-      await refresh(cur === s ? `song:${s.source}` : undefined);
+      const r = await api(action, body);
+      if (job) await waitJob(r.job, step => msg(`${working} (${step}…)`));
+      await refresh(here() ? `song:${s.source}` : undefined);
     } catch (err) { msg(err.message, true); busy(false); }
   };
   const setInstrumental = async value => {
@@ -464,11 +533,15 @@ function wireVocals(s) {
   if (chartBtn) chartBtn.onclick = () => {
     const lyrics = $("#lyrics").value;
     if (!lyrics.trim()) return msg("Paste the lyrics first.", true);
-    run("vocals", { folder: s.folder, lyrics }, "Charting vocals");
+    if (s.kind === "split") run("vocals", { folder: s.folder, lyrics }, "Charting vocals");
+    else run("vocals/committed", { source: s.source, lyrics }, "Charting vocals");
   };
   const remove = $("#vocals-remove");
   if (remove) remove.onclick = () => confirm("Remove the generated vocals? The vocals go back into song.ogg.") &&
     run("vocals/remove", { folder: s.folder }, "Removing the generated vocals");
+  const undo = $("#vocals-undo");
+  if (undo) undo.onclick = () => confirm("Remove the charted vocals? The song's own chart and song.ini come back.") &&
+    run("vocals/undo", { source: s.source }, "Removing the charted vocals", false);
   const inst = $("#instrumental");
   if (inst) inst.onclick = () => setInstrumental(true);
   const notInst = $("#not-instrumental");
@@ -477,6 +550,17 @@ function wireVocals(s) {
 
 function wireDecisions(s) {
   const msg = (id, text, err) => { const m = $(id); m.textContent = text; m.className = `status-msg${err ? " err" : ""}`; };
+  if (s.kind === "vocals") {
+    const act = async (action, working) => {
+      document.querySelectorAll("#commit, #skip, .vocals button").forEach(b => b.disabled = true);
+      msg("#decide-msg", working);
+      try { stop(); await api(action, { folder: s.folder }); await refresh(`song:${s.source}`); }
+      catch (err) { msg("#decide-msg", err.message, true); document.querySelectorAll("#commit, #skip, .vocals button").forEach(b => b.disabled = false); }
+    };
+    $("#commit").onclick = () => act("vocals/commit", "Committing…");
+    $("#skip").onclick = () => confirm("Discard the charted vocals? The song folder stays as it is.") && act("vocals/discard", "Discarding…");
+    return;
+  }
   const decide = async (action, body) => {
     const next = nextToReview();
     document.querySelectorAll("#commit, #skip, #build").forEach(b => b.disabled = true);

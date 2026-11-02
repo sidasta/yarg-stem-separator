@@ -120,29 +120,55 @@ def charted_from_ini(song_dir):
     return result
 
 
-def charted_from_mid(song_dir):
-    """{model stem: True/False} from notes.mid track names, or None if there is no notes.mid."""
-    mid = song_dir / "notes.mid"
-    if not mid.exists():
+CHART_NAMES = ("notes.mid", "notes.chart")
+
+
+def chart_file(song_dir):
+    """The song's chart file: notes.mid, else notes.chart (None if it has neither)."""
+    return next((Path(song_dir) / n for n in CHART_NAMES if (Path(song_dir) / n).exists()), None)
+
+
+def load_chart(song_dir):
+    """The song's chart as a mido.MidiFile (a notes.chart is converted in memory), or None."""
+    path = chart_file(song_dir)
+    if path is None:
         return None
-    import mido
+    if path.name == "notes.mid":
+        import mido
+        return mido.MidiFile(str(path), clip=True)
+    import chartfile
+    return chartfile.to_midi(chartfile.parse(path), chartfile.ini_values(path.with_name("song.ini")))
+
+
+def charted_from_mid(song_dir):
+    """{model stem: True/False} from the chart's tracks that have notes, or None if there is no chart."""
     try:
-        names = {t.name.strip().upper() for t in mido.MidiFile(str(mid), clip=True).tracks}
+        mid = load_chart(song_dir)
     except Exception:
         return None
+    if mid is None:
+        return None
+    # Gems are below 103 in every part; above are markers (solo, overdrive, phrases, ...).
+    names = {t.name.strip().upper() for t in mid.tracks
+             if any(m.type == "note_on" and m.velocity and m.note < 103 for m in t)}
     return {stem: any(n in names for n in tracks) for stem, (_, _, tracks) in STEM_MAP.items()}
 
 
 def charted_instruments(song_dir):
-    """Decide which instruments get a stem: song.ini first, notes.mid where ini has no tag."""
+    """Decide which instruments get a stem: charted in the chart file, unless song.ini says it isn't.
+
+    song.ini alone decides only when there is no chart to read: many list a difficulty for
+    every instrument, charted or not."""
     ini = charted_from_ini(song_dir)
     mid = charted_from_mid(song_dir)
     result = {}
     for stem in STEM_MAP:
-        if ini[stem] is not None:
-            result[stem] = ini[stem]
+        if ini[stem] is False:
+            result[stem] = False
         elif mid is not None:
             result[stem] = mid[stem]
+        elif ini[stem] is not None:
+            result[stem] = ini[stem]
         else:
             result[stem] = True  # nothing to go on: keep it and let the silence check decide
     return result
@@ -201,7 +227,7 @@ def separate(mix, sr, model):
     return stems
 
 
-# Expert-difficulty gem notes per instrument in notes.mid (vocals: pitched lyric notes).
+# Expert-difficulty gem notes per instrument in the chart (vocals: pitched lyric notes).
 CHART_NOTES = {"guitar": range(96, 101), "bass": range(96, 101), "piano": range(96, 101),
                "drums": range(95, 101), "vocals": range(36, 85)}
 # A second of a stem counts as "playing" if it is within this many dB of the mix.
@@ -210,11 +236,10 @@ ACTIVE_DB = -25.0
 
 def chart_spans(song_dir, gap=1.0, pad=0.25):
     """{model stem: [(start s, end s), ...]} where the main chart track has expert notes."""
-    mid = Path(song_dir) / "notes.mid"
-    if not mid.exists():
+    mf = load_chart(song_dir)
+    if mf is None:
         return {}
     import mido
-    mf = mido.MidiFile(str(mid), clip=True)
     by_name = {t.name.strip().upper(): t for t in mf.tracks}
     spans = {}
     for stem, (_, _, track_names) in STEM_MAP.items():

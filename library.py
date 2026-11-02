@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -91,12 +92,12 @@ def set_song(state, source, **fields):
     return entry
 
 
-def staged_folders(staging, source=None):
-    """{folder name: manifest} for staged (non-benchmark) splits, optionally for one song."""
+def staged_folders(staging, source=None, kinds=("split",)):
+    """{folder name: manifest} for staged splits (or other kinds, e.g. "vocals"), optionally for one song."""
     out = {}
     for m in sorted(Path(staging).glob("*/manifest.json")):
         data = stemsplit.read_manifest(m.parent)
-        if data and data.get("kind") == "split" and (source is None or data.get("source") == str(source)):
+        if data and data.get("kind") in kinds and (source is None or data.get("source") == str(source)):
             out[m.parent.name] = data
     return out
 
@@ -338,8 +339,8 @@ def vocals_undecided(entry, manifest):
 
 
 def set_instrumental(staging, source, value):
-    with edit_state(staging) as state:
-        set_song(state, source, instrumental=bool(value))
+    with edit_state(staging) as state:  # not set_song: for a committed song, "updated" is when it was committed
+        state["songs"][str(source)]["instrumental"] = bool(value)
 
 
 def commit_ready(staging):
@@ -372,7 +373,7 @@ def _sha1(path):
 
 
 def _remove_staged(staging, source):
-    for folder, m in staged_folders(staging, source).items():
+    for folder, m in staged_folders(staging, source, kinds=("split", "vocals")).items():
         shutil.rmtree(Path(staging) / folder, ignore_errors=True)
         work = Path((m.get("con") or {}).get("work_dir", ""))
         if m.get("con") and con_work_dir(staging).resolve() in work.resolve().parents:
@@ -405,11 +406,7 @@ def commit(staging, folder):
         raise ValueError(f"song folder already has files that would be overwritten: {', '.join(clash or stemsplit.existing_stems(song_dir))}")
     chart = _generated_chart(m)
     if chart:
-        if not (song_dir / "notes.mid").exists() or _sha1(song_dir / "notes.mid") != m["vocals_chart"]["source_sha1"]:
-            raise ValueError("notes.mid has changed since the vocals were charted; add the vocals again")
-        old = [n + ".orig" for n, _ in chart if (song_dir / (n + ".orig")).exists()]
-        if old:
-            raise ValueError(f"{song_dir.name} already has {', '.join(old)}; move it out of the way first")
+        _check_chart_source(song_dir, m["vocals_chart"], chart)
 
     # Copy to temporary names first, so a failure part-way leaves the song folder as it was.
     tmp = []
@@ -425,11 +422,7 @@ def commit(staging, folder):
         for name in tmp:
             (song_dir / (name + TMP_SUFFIX)).unlink(missing_ok=True)
         raise
-    chart_backups = {}
-    for name, _ in chart:  # the song's own chart files are kept as .orig, like the audio
-        if (song_dir / name).exists():
-            os.replace(song_dir / name, song_dir / (name + ".orig"))
-            chart_backups[name] = name + ".orig"
+    chart_backups = _back_up_chart(song_dir, m["vocals_chart"], chart) if chart else {}
     for name in tmp:
         os.replace(song_dir / (name + TMP_SUFFIX), song_dir / name)
     record = {"committed": _now(), "variant": _variant_label(m), "model": m.get("model"),
@@ -446,6 +439,31 @@ def commit(staging, folder):
 
 
 CHART_FILES = ("notes.mid", "song.ini")
+# A notes.chart is converted to notes.mid when vocals are added, and kept only as a backup:
+# with both files in the folder, the game would pick one of them.
+RETIRED_CHART = "notes.chart"
+
+
+def _check_chart_source(song_dir, vocals_chart, chart):
+    """Refuse to commit a generated chart if the song's own chart changed or a backup is in the way."""
+    source = vocals_chart.get("source_file", "notes.mid")
+    if not (song_dir / source).exists() or _sha1(song_dir / source) != vocals_chart["source_sha1"]:
+        raise ValueError(f"{source} has changed since the vocals were charted; add the vocals again")
+    names = [n for n, _ in chart] + ([RETIRED_CHART] if source == RETIRED_CHART else [])
+    old = [n + ".orig" for n in names if (song_dir / (n + ".orig")).exists()]
+    if old:
+        raise ValueError(f"{song_dir.name} already has {', '.join(old)}; move it out of the way first")
+
+
+def _back_up_chart(song_dir, vocals_chart, chart):
+    """Keep the song's own chart files as .orig (like the audio). Returns {file: backup}."""
+    backups = {}
+    names = [n for n, _ in chart] + ([RETIRED_CHART] if vocals_chart.get("source_file") == RETIRED_CHART else [])
+    for name in names:
+        if (song_dir / name).exists():
+            os.replace(song_dir / name, song_dir / (name + ".orig"))
+            backups[name] = name + ".orig"
+    return backups
 
 
 def _generated_chart(m):
@@ -521,7 +539,8 @@ def _undo_con(staging, folder, record):
     if not backup.is_file():
         raise ValueError(f"the backed-up CON file is missing: {backup}")
     shutil.move(str(backup), str(original))
-    for name in record["files"]:
+    # the folder came from the CON, so chart backups from adding vocals later go too
+    for name in record["files"] + [b for b in record.get("chart_backups", {}).values() if b.endswith(".orig")]:
         if Path(name).name == name:
             (folder / name).unlink(missing_ok=True)
     (folder / RECORD_NAME).unlink()
@@ -531,7 +550,8 @@ def _undo_con(staging, folder, record):
         backup.parent.rmdir()
     with edit_state(staging) as state:
         set_song(state, original, status="pending", staged=None, variant=None, files=None, flags=[],
-                 folder=None, con_backup=None)
+                 folder=None, con_backup=None, needs_vocals=False, vocals_added=False, vocals_checked=None)
+    _remove_staged(staging, original)  # a vocal chart staged for the committed song
     return record
 
 
@@ -555,7 +575,7 @@ def undo(staging, source):
     if Path(backup).name != backup or Path(replaced).name != replaced or not (song_dir / backup).exists():
         raise ValueError(f"the backup of the original audio is missing in {song_dir.name}")
     chart_backups = {n: b for n, b in record.get("chart_backups", {}).items()
-                     if n in CHART_FILES and b == n + ".orig"}
+                     if n in CHART_FILES + (RETIRED_CHART,) and b == n + ".orig"}
     missing = [b for b in chart_backups.values() if not (song_dir / b).exists()]
     if missing:
         raise ValueError(f"the backup of the original chart is missing in {song_dir.name}: {', '.join(missing)}")
@@ -567,8 +587,185 @@ def undo(staging, source):
         os.replace(song_dir / bak, song_dir / name)
     record_path.unlink()
     with edit_state(staging) as state:
-        set_song(state, song_dir, status="pending", staged=None, variant=None, files=None, flags=[])
+        set_song(state, song_dir, status="pending", staged=None, variant=None, files=None, flags=[],
+                 needs_vocals=False, vocals_added=False, vocals_checked=None)
+    _remove_staged(staging, song_dir)  # a vocal chart staged for the committed song
     return record
+
+
+# ---------------------------------------------------------------- vocals for songs committed earlier
+# Songs split before their chart could be read (e.g. notes.chart songs) may have a vocals.ogg
+# but no vocal part. Their vocals are charted from that vocals.ogg and staged as kind "vocals";
+# committing writes only the chart (notes.mid, song.ini) and records it in the commit record,
+# so undoing the whole commit still restores everything.
+
+def _song_folder(source, entry):
+    return Path(entry.get("folder") or source)  # CON songs live in the folder made from the CON
+
+
+def _read_record(song_dir):
+    try:
+        return json.loads((Path(song_dir) / RECORD_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_record(song_dir, record):
+    (Path(song_dir) / RECORD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+_vocals_check = threading.Lock()
+
+
+def check_committed_vocals(staging):
+    """Mark committed songs that have a vocals.ogg but no vocals in their chart (needs_vocals).
+
+    Each chart is read again only when it changes; the first run reads every committed
+    song's chart (a few minutes for a large library), so the review page runs this in the
+    background. Results are saved as it goes. Returns how many songs need vocals, or None
+    if a check is already running."""
+    if not _vocals_check.acquire(blocking=False):
+        return None
+    try:
+        found = {}
+
+        def save():
+            with edit_state(staging) as state:  # not set_song: "updated" is when the song was committed
+                for source, (needs, key) in found.items():
+                    e = state["songs"].get(source)
+                    if e and e.get("status") == "committed":
+                        e.update(needs_vocals=needs, vocals_checked=key)
+            found.clear()
+
+        songs = {s: dict(e) for s, e in load_state(staging)["songs"].items() if e.get("status") == "committed"}
+        read = 0
+        for source, e in songs.items():
+            song_dir = _song_folder(source, e)
+            chart = stemsplit.chart_file(song_dir) if song_dir.is_dir() else None
+            if chart is None or not (song_dir / "vocals.ogg").exists() or _read_record(song_dir) is None:
+                if e.get("needs_vocals") or e.get("vocals_checked"):
+                    found[source] = (False, None)
+                continue
+            st = chart.stat()
+            key = [chart.name, st.st_size, st.st_mtime_ns]
+            if e.get("vocals_checked") != key:
+                charted = stemsplit.charted_from_mid(song_dir)
+                found[source] = (charted is not None and charted["vocals"] is False, key)
+                read += 1
+                if read % 25 == 0:
+                    save()
+        save()
+        return sum(1 for e in load_state(staging)["songs"].values()
+                   if e.get("status") == "committed" and e.get("needs_vocals"))
+    finally:
+        _vocals_check.release()
+
+
+def vocals_check_running():
+    return _vocals_check.locked()
+
+
+def stage_committed_vocals(staging, source, lyrics, log=print):
+    """Chart vocals for a committed song from its vocals.ogg, staged for review. Returns the folder name."""
+    import vocals
+    entry = load_state(staging)["songs"].get(str(source), {})
+    if entry.get("status") != "committed":
+        raise ValueError("this song isn't committed")
+    song_dir = _song_folder(source, entry)
+    record = _read_record(song_dir)
+    if record is None:
+        raise ValueError(f"{song_dir.name} has no commit record")
+    if record.get("vocals"):
+        raise ValueError("vocals were already added to this song; remove them first")
+    with edit_state(staging) as state:  # kept so they can be offered again
+        state["songs"][str(source)].update(lyrics=lyrics, instrumental=False)
+    folder = next(iter(staged_folders(staging, source, kinds=("vocals",))), None)
+    if folder is None:
+        folder = f"{song_dir.name} [vocals]"
+        if (Path(staging) / folder).exists():
+            folder = f"{song_dir.name} ~{hashlib.sha1(str(source).encode()).hexdigest()[:6]} [vocals]"
+    backup = record.get("backup")
+    original = song_dir / backup if backup and Path(backup).name == backup else None
+    vocals.stage_committed(song_dir, Path(staging) / folder, lyrics, source=str(source), original=original, log=log)
+    return folder
+
+
+def _staged_vocals(staging, folder):
+    staged = Path(staging) / folder
+    m = stemsplit.read_manifest(staged)
+    if not m or m.get("kind") != "vocals":
+        raise ValueError("not a staged vocal chart")
+    return staged, m
+
+
+def commit_vocals(staging, folder):
+    """Write a vocal chart staged for a committed song into its folder; its own chart files become .orig."""
+    staged, m = _staged_vocals(staging, folder)
+    song_dir = Path(m["song_dir"])
+    record = _read_record(song_dir)
+    if record is None:
+        raise ValueError(f"{song_dir.name} has no commit record any more")
+    chart = _generated_chart(m)
+    _check_chart_source(song_dir, m["vocals_chart"], chart)
+    tmp = []
+    try:
+        for name, src in chart:
+            shutil.copy2(src, song_dir / (name + TMP_SUFFIX))
+            tmp.append(name)
+    except Exception:
+        for name in tmp:
+            (song_dir / (name + TMP_SUFFIX)).unlink(missing_ok=True)
+        raise
+    backups = _back_up_chart(song_dir, m["vocals_chart"], chart)
+    for name in tmp:
+        os.replace(song_dir / (name + TMP_SUFFIX), song_dir / name)
+    added = [n for n, _ in chart if n not in backups]
+    record["vocals"] = {"added": _now(), "files": added, "chart_backups": backups}
+    record["files"] = record.get("files", []) + [n for n in added if n not in record.get("files", [])]
+    record["chart_backups"] = {**record.get("chart_backups", {}), **backups}
+    _write_record(song_dir, record)
+    with edit_state(staging) as state:
+        e = state["songs"].get(m["source"])
+        if e:
+            e.update(needs_vocals=False, vocals_added=True, files=record["files"])
+    shutil.rmtree(staged, ignore_errors=True)
+    return record
+
+
+def discard_vocals(staging, folder):
+    staged, _ = _staged_vocals(staging, folder)
+    shutil.rmtree(staged)
+
+
+def undo_vocals(staging, source):
+    """Take back vocals added to a committed song: its own chart and song.ini come back."""
+    entry = load_state(staging)["songs"].get(str(source), {})
+    song_dir = _song_folder(source, entry)
+    record = _read_record(song_dir) or {}
+    added = record.get("vocals")
+    if not added:
+        raise ValueError("no vocals were added to this song after it was committed")
+    backups = {n: b for n, b in added.get("chart_backups", {}).items()
+               if n in CHART_FILES + (RETIRED_CHART,) and b == n + ".orig"}
+    missing = [b for b in backups.values() if not (song_dir / b).exists()]
+    if missing:
+        raise ValueError(f"the backup of the original chart is missing in {song_dir.name}: {', '.join(missing)}")
+    for name in added.get("files", []):
+        if name in CHART_FILES:
+            (song_dir / name).unlink(missing_ok=True)
+    for name, bak in backups.items():
+        os.replace(song_dir / bak, song_dir / name)
+    record["files"] = [f for f in record.get("files", []) if f not in added.get("files", [])]
+    record["chart_backups"] = {n: b for n, b in record.get("chart_backups", {}).items() if n not in backups}
+    if not record["chart_backups"]:
+        del record["chart_backups"]
+    del record["vocals"]
+    _write_record(song_dir, record)
+    with edit_state(staging) as state:
+        e = state["songs"].get(str(source))
+        if e:
+            # its own chart is back, which had no vocals; the next check confirms it
+            e.update(vocals_added=False, needs_vocals=True, files=record["files"], vocals_checked=None)
 
 
 def skip(staging, source):

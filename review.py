@@ -112,6 +112,34 @@ def remove_vocals(job, staging, folder):
     return base.name
 
 
+def check_vocals_in_background(staging):
+    """Look for committed songs with no vocals charted (slow the first time; see library)."""
+    def run():
+        try:
+            library.check_committed_vocals(staging)
+        except Exception:
+            traceback.print_exc()
+    threading.Thread(target=run, daemon=True).start()
+
+
+_chart_lyrics = {}
+
+
+def chart_lyrics(song_dir):
+    """The lyric events of a song's notes.chart as text, to start the lyrics box from ("" if none)."""
+    import chartfile
+    path = stemsplit.chart_file(song_dir)
+    if path is None or path.suffix != ".chart":
+        return ""
+    key = (str(path), path.stat().st_mtime_ns)
+    if key not in _chart_lyrics:
+        try:
+            _chart_lyrics[key] = chartfile.lyrics_text(chartfile.parse(path))
+        except (OSError, ValueError):
+            _chart_lyrics[key] = ""
+    return _chart_lyrics[key]
+
+
 class QueueRunner:
     """Runs library.run_queue in a background thread and keeps its progress for the page."""
 
@@ -217,6 +245,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         original_file=data.get("original_file", "original.ogg"),
                         truth=[], raw=sorted(p.stem for p in (self.staging / raw_folder / "raw").glob("*.ogg")))
             songs.append(data)
+        for folder, data in library.staged_folders(self.staging, kinds=("vocals",)).items():
+            data.update(folder=folder, raw_folder=folder, raw=[], truth=[],
+                        files=sorted(p.stem for p in (self.staging / folder).glob("*.ogg") if p.stem != "original"))
+            songs.append(data)
         for m in sorted(self.staging.glob("BENCH - */manifest.json")):
             data = stemsplit.read_manifest(m.parent)
             path = m.parent
@@ -234,11 +266,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
               "file": path, "reason": info.get("reason", info["status"])}
              for path, info in state.get("cons", {}).items() if info["status"] != "convertible"),
             key=lambda c: c["song"].lower())
-        return {"songs": songs, "state": state["songs"],
+        # A .chart's own lyric events start the lyrics box, for songs that will be asked for lyrics.
+        lyrics = {}
+        for s in songs:
+            if s.get("kind") != "split":
+                continue
+            chart = stemsplit.chart_file(s.get("chart_source") or s.get("chart_dir") or s["source"])
+            s["chart_file"] = chart.name if chart else None
+            if not s.get("variant_of") and s.get("charted", {}).get("vocals") is False:
+                lyrics[s["source"]] = chart_lyrics(s.get("chart_dir") or s["source"])
+        for source, e in state["songs"].items():
+            if e.get("status") == "committed" and e.get("needs_vocals"):
+                lyrics[source] = chart_lyrics(e.get("folder") or source)
+        return {"songs": songs, "state": state["songs"], "chart_lyrics": {k: v for k, v in lyrics.items() if v},
                 "cons_text": library.describe_cons(con_counts) if con_counts else "",
                 "skipped_cons": skipped_cons,
                 "con_backups": str(library.con_backup_dir(self.staging)),
                 "has_settings": bool(library.load_settings(self.staging)["roots"]), "queue_running": QUEUE.running,
+                "vocals_checking": library.vocals_check_running(),
                 "vocals": vocals_available()}
 
     # ------------------------------------------------------------ writes
@@ -268,6 +313,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if action == "vocals/remove":
                 folder = self.staged_folder(body.get("folder"))
                 return self.send_json({"job": start_job(lambda job: remove_vocals(job, self.staging, folder))})
+            if action == "vocals/committed":
+                source, lyrics = self.known_source(body.get("source")), str(body.get("lyrics") or "")
+                if not lyrics.strip():
+                    raise ValueError("paste the lyrics first")
+                if len(lyrics) > 50000:
+                    raise ValueError("that's too long for one song's lyrics")
+                return self.send_json({"job": start_job(lambda job: library.stage_committed_vocals(
+                    self.staging, source, lyrics, log=lambda step: job.update(step=step)))})
+            if action == "vocals/commit":
+                return self.send_json({"ok": True, "record": library.commit_vocals(self.staging, self.staged_folder(body.get("folder")))})
+            if action == "vocals/discard":
+                library.discard_vocals(self.staging, self.staged_folder(body.get("folder")))
+                return self.send_json({"ok": True})
+            if action == "vocals/undo":
+                library.undo_vocals(self.staging, self.known_source(body.get("source")))
+                return self.send_json({"ok": True})
             if action == "instrumental":
                 library.set_instrumental(self.staging, self.known_source(body.get("source")), body.get("value", True))
                 return self.send_json({"ok": True})
@@ -284,6 +345,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if action == "scan":
                 s = library.load_settings(self.staging)
                 found, todo, cons, held = library.scan(s["roots"], self.staging, s["retry_failed"])
+                check_vocals_in_background(self.staging)
                 return self.send_json({"found": found, "todo": len(todo), "cons": cons,
                                        "cons_text": library.describe_cons(cons) if cons else "",
                                        "held_text": library.describe_held(held)})
@@ -390,6 +452,7 @@ def main():
         return
     library.sync_staged(staging)
     threading.Thread(target=device_info, daemon=True).start()  # load PyTorch now, not on the first page view
+    check_vocals_in_background(staging)
     print(f"Stem separator is running at {url}", flush=True)
     print("Keep this window open while you use it; close it (or press Ctrl+C) to stop.", flush=True)
     if args.open:
