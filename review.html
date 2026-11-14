@@ -94,7 +94,7 @@
 </head>
 <body>
 <div class="app">
-  <nav><h1>Stem Review</h1><div class="summary" id="summary"></div><button class="btn navtop" data-key="setup">⚙ Library &amp; splitting</button><div id="songs"></div></nav>
+  <nav><h1>Stem Review</h1><div class="summary" id="summary"></div><div id="charter-prompt"></div><a class="btn navtop" href="/doctor" style="display:block;text-decoration:none">🩺 Chart doctor</a><button class="btn navtop" data-key="setup">⚙ Library &amp; splitting</button><div id="songs"></div></nav>
   <main id="main"><p class="loading">Loading…</p></main>
 </div>
 <script>
@@ -721,6 +721,10 @@ async function renderSetup() {
       <label class="opt"><input type="checkbox" id="auto-variants" ${st.auto_variants ? "checked" : ""}>
         For flagged songs, also prepare a “fill from other + gated song” variant to compare</label><br>
       <label class="opt"><input type="checkbox" id="retry-failed" ${st.retry_failed ? "checked" : ""}> Retry songs that failed before</label>
+      <div class="row" style="margin-top:10px"><label for="charter-name">Your charter name</label>
+        <input type="text" id="charter-name" value="${esc(st.charter_name || "")}" placeholder="e.g. your alias" style="max-width:220px; flex:none">
+        <span class="note">Added to a song's <code>charter</code> credit in song.ini when you chart its vocals here or fix it in the chart doctor.</span></div>
+      <div class="status-msg" id="charter-msg"></div>
     </div>
     <div class="card">
       <h3>Splitting</h3>
@@ -764,6 +768,10 @@ async function renderSetup() {
   $("#model").onchange = e => save({ model: e.target.value });
   $("#auto-variants").onchange = e => save({ auto_variants: e.target.checked });
   $("#retry-failed").onchange = e => save({ retry_failed: e.target.checked });
+  $("#charter-name").onchange = async e => {
+    try { setup.settings = (await api("settings", { charter_name: e.target.value })).settings; msg("#charter-msg", "Saved."); renderCharterPrompt(); }
+    catch (err) { msg("#charter-msg", err.message, true); }
+  };
   $("#scan").onclick = async () => {
     msg("#scan-msg", "Looking through your folders…");
     try {
@@ -862,6 +870,28 @@ async function pollQueue() {
   } finally { polling = false; }
 }
 
+// Ask once for the name to credit in song.ini, until it's set or skipped (also in Library & splitting).
+async function renderCharterPrompt() {
+  const el = $("#charter-prompt");
+  let skipped = false;
+  try { skipped = localStorage.getItem("charter-prompt-skipped") === "1"; } catch {}
+  const s = (setup && setup.settings) || (await (await fetch("/api/settings")).json()).settings;
+  if (s.charter_name || skipped) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="card" style="margin:6px 0 10px; padding:10px">
+      <div style="font-weight:600; margin-bottom:4px">Your charter name</div>
+      <div class="note" style="margin-bottom:6px">When you chart vocals or fix a chart here, this is added to the song's charter credit.</div>
+      <div class="row" style="flex-wrap:nowrap"><input type="text" id="cp-name" placeholder="e.g. your alias" style="min-width:0; flex:1">
+        <button class="btn small" id="cp-save" style="width:auto; flex:none; margin:0">Save</button></div>
+      <button class="btn small" id="cp-skip" style="width:auto; margin-top:6px; border:0; padding-left:0; color:var(--muted)">Not now</button>
+      <div class="status-msg" id="cp-msg"></div></div>`;
+  $("#cp-save").onclick = async () => {
+    try { await api("settings", { charter_name: $("#cp-name").value }); if (setup) setup.settings.charter_name = $("#cp-name").value; renderCharterPrompt(); }
+    catch (err) { $("#cp-msg").textContent = err.message; $("#cp-msg").className = "status-msg err"; }
+  };
+  $("#cp-skip").onclick = () => { try { localStorage.setItem("charter-prompt-skipped", "1"); } catch {} el.innerHTML = ""; };
+}
+
+renderCharterPrompt();
 refresh().then(() => {
   if (!lib.has_settings && !reviewOrder.length) return selectByKey("setup");
   selectByKey(reviewOrder[0] || "setup");

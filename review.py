@@ -17,9 +17,11 @@ import string
 import sys
 import threading
 import traceback
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
+import chartdoctor
 import library
 import stemsplit
 import vocals
@@ -102,7 +104,8 @@ def add_vocals(job, staging, folder, lyrics):
     source = stemsplit.read_manifest(base)["source"]
     with library.edit_state(staging) as state:  # kept so a re-split can offer them again
         library.set_song(state, source, lyrics=lyrics, instrumental=False)
-    vocals.add_vocals(base, lyrics, log=lambda step: job.update(step=step))
+    vocals.add_vocals(base, lyrics, log=lambda step: job.update(step=step),
+                      credit=library.load_settings(staging)["charter_name"])
     return base.name
 
 
@@ -230,10 +233,63 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                    "queue": QUEUE.status()})
         if self.path == "/api/queue":
             return self.send_json(QUEUE.status())
+        if self.path.split("?")[0] in ("/doctor", "/doctor.html"):
+            return self.send_bytes((ROOT / "doctor.html").read_bytes(), "text/html; charset=utf-8")
+        if self.path.startswith("/api/doctor/"):
+            return self.doctor_get()
         if self.path.startswith("/api/job/"):
             job = _jobs.get(self.path.rsplit("/", 1)[-1])
             return self.send_json(job or {"status": "error", "error": "unknown job"})
         return super().do_GET()
+
+    def doctor_get(self):
+        url = urllib.parse.urlsplit(self.path)
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+        try:
+            if url.path == "/api/doctor/songs":
+                root = Path(q.get("root") or "")
+                if not root.is_dir():
+                    raise ValueError(f"not a folder: {root}")
+                return self.send_json({"root": str(root.resolve()), "songs": chartdoctor.find_songs(root)})
+            song = self.doctor_song(q.get("song"))
+            if url.path == "/api/doctor/chart":
+                return self.send_json(chartdoctor.load(song))
+            if url.path == "/api/doctor/pitch":
+                found = chartdoctor.cached_pitch(song, q.get("instrument"), self.staging / "doctor-cache")
+                return self.send_json(found or {"missing": True})
+            if url.path == "/api/doctor/audio":
+                name = q.get("file") or ""
+                if Path(name).name != name or not name.lower().endswith(".ogg") or not (song / name).is_file():
+                    raise ValueError("unknown audio file")
+                return self.send_bytes((song / name).read_bytes(), "audio/ogg")
+            return self.send_json({"error": "not found"}, 404)
+        except (ValueError, KeyError, OSError) as e:
+            return self.send_json({"error": str(e)}, 400)
+
+    def doctor_song(self, song):
+        """A song folder the doctor may read and change: any local folder with a notes.mid."""
+        path = Path(str(song or "")).resolve()
+        if not song or not (path / "notes.mid").is_file():
+            raise ValueError("not a song folder with a notes.mid")
+        return path
+
+    def doctor_post(self, action, body):
+        song = self.doctor_song(body.get("song"))
+        instrument = body.get("instrument")
+        if instrument not in chartdoctor.INSTRUMENTS and action != "restore":
+            raise ValueError("unknown instrument")
+        if action == "pitch":
+            cache = self.staging / "doctor-cache"
+            return {"job": start_job(lambda job: chartdoctor.pitch(
+                song, instrument, cache, log=lambda step: job.update(step=step)) and "")}
+        if action == "save":
+            result = chartdoctor.save(song, instrument, body.get("expert") or [], bool(body.get("rebuild_lower")),
+                                      credit=library.load_settings(self.staging)["charter_name"])
+            return {"ok": True, **result}
+        if action == "restore":
+            chartdoctor.restore(song)
+            return {"ok": True}
+        raise ValueError("unknown action")
 
     def library(self):
         songs = []
@@ -295,6 +351,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
             action = self.path.removeprefix("/api/")
+            if action.startswith("doctor/"):
+                return self.send_json(self.doctor_post(action.removeprefix("doctor/"), body))
             if action == "remix":
                 folder = self.staged_folder(body.get("folder"))
                 fill = [s for s in body.get("fill", []) if s in stemsplit.STEM_MAP]
@@ -381,6 +439,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             settings["roots"] = roots
         if body.get("model") in MODELS:
             settings["model"] = body["model"]
+        if "charter_name" in body:
+            name = " ".join(str(body["charter_name"] or "").split())
+            if len(name) > 60 or any(c in name for c in "=[],"):
+                raise ValueError("a charter name can't be longer than 60 characters or contain = [ ] or a comma")
+            settings["charter_name"] = name
         for key in ("auto_variants", "retry_failed"):
             if key in body:
                 settings[key] = bool(body[key])

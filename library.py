@@ -162,7 +162,8 @@ def find_songs(roots):
 
 # ---------------------------------------------------------------- settings
 
-DEFAULT_SETTINGS = {"roots": [], "model": stemsplit.DEFAULT_MODEL, "auto_variants": True, "retry_failed": False}
+DEFAULT_SETTINGS = {"roots": [], "model": stemsplit.DEFAULT_MODEL, "auto_variants": True, "retry_failed": False,
+                    "charter_name": ""}  # added to song.ini's charter credits for charts made or fixed here
 
 
 def load_settings(staging):
@@ -686,7 +687,8 @@ def stage_committed_vocals(staging, source, lyrics, log=print):
             folder = f"{song_dir.name} ~{hashlib.sha1(str(source).encode()).hexdigest()[:6]} [vocals]"
     backup = record.get("backup")
     original = song_dir / backup if backup and Path(backup).name == backup else None
-    vocals.stage_committed(song_dir, Path(staging) / folder, lyrics, source=str(source), original=original, log=log)
+    vocals.stage_committed(song_dir, Path(staging) / folder, lyrics, source=str(source), original=original, log=log,
+                           credit=load_settings(staging)["charter_name"])
     return folder
 
 

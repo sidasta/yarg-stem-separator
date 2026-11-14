@@ -6,7 +6,14 @@ Splits single-file YARG / Clone Hero songs (`song.ogg`, `.opus`, `.mp3` or `.wav
 (`vocals`, `guitar`, `rhythm` (bass), `drums`, `keys`) with the BS-Roformer-SW model,
 lets you listen and choose, then writes the result into the song folder (undoable).
 
-**New in v0.3.0: vocal charting from lyrics.** Songs whose chart has no vocals can get a
+**New in v0.5.0: the chart doctor (experimental).** For guitar and bass charts that don't
+feel right in game, such as a riff charted as two frets alternating or Hard copied from
+Expert. It shows the chart against the separated stem and lets you adjust notes. It's for
+**adjusting existing charts, not charting songs from scratch**, and it's best used **after
+you've played the song in game** and know what you'd change.
+See [Chart doctor](#chart-doctor-experimental).
+
+**Since v0.3.0: vocal charting from lyrics.** Songs whose chart has no vocals can get a
 vocal chart: paste the lyrics, and they're lined up with the separated vocal track and
 turned into notes at the sung pitch. It's a quick starting point, **not as accurate as
 charting by hand**, so check it and fine-tune in a chart editor if needed.
@@ -193,6 +200,56 @@ It prints any `song.ini` settings to add. Then move `notes.chart` out of the fol
 
 Songs that already have stems are never touched. Staging takes about 60–90 MB per song
 until it is committed or skipped (`staging/`).
+
+## Chart doctor (experimental)
+
+Some custom charts were made with an auto-charter and never played: a three-note riff
+charted as two frets alternating, the same note jumping between frets, Hard copied from
+Expert. Once a song has stems, the chart doctor can show this and help fix it. Open
+<http://localhost:8765/doctor> (there's a **Chart doctor** link on the review page), enter
+your songs folder, and pick a song.
+
+> ⚠️ **Experimental, and for adjustments only.** The chart doctor is for fixing parts of an
+> existing chart: wrong frets, a few extra or missing notes, sustains, HOPOs. It isn't meant
+> for building a chart from scratch; use a full chart editor for that.
+>
+> **Play the song in game first.** It's strongly recommended that you only change a chart
+> after you've actually played it and noticed something worth adjusting. The pitch hints
+> and diagnosis can be wrong, especially on distorted guitar, so let your own playing and
+> your ears decide, not the tool alone. Every first save keeps the original as
+> `notes.mid.orig`, and **Restore the original chart** puts it back.
+
+- **Diagnosis**: how much of the chart sits on two frets, how often the chart changes fret
+  when the stem repeats the same note, and whether Hard is a copy of Expert.
+- **Timeline**: the stem's pitch (from CREPE) above the Expert notes, with each note drawn at
+  the pitch the stem plays there, in its fret colour. Wrong frets are easy to see.
+- **Riffs**: parts of the chart that repeat exactly. Each riff's steps are grouped by fret.
+  Putting a group on another fret, or clicking a single step's lane, changes every repeat
+  straight away. Loop the riff with the band to check it by ear. Above each step is the
+  stem's best guess at the note and how many repeats agree. **Suggest frets from pitch**
+  puts the lowest guessed note on green; on distorted guitar and power chords the guesses
+  are often wrong, so it's only a starting point.
+- **Editing**: click an empty spot in a lane to add a note, a note's column in another lane to
+  move it (Shift-click builds a chord), drag sideways from a note to set its sustain,
+  right-click or Delete to remove it, and H to switch it between HOPO and strum (HOPOs show a
+  white dot, taps are hollow). The top lane is open notes. Drag across notes to select them,
+  then move them a fret (up/down arrows), a grid step in time (left/right), or delete or
+  re-fret them together. With **Snap** on, notes land on the grid, which follows the zoom
+  (1/4, 1/8, 1/16...) or can be set (including triplets). Edits to a riff note can apply to
+  every repeat. Ctrl+Z / Ctrl+Y undo and redo.
+- **Save** rewrites only that instrument's notes in `notes.mid`. Star power, solos, taps,
+  events and the other instruments are kept, and the first save keeps `notes.mid.orig`. Your
+  charter name (set at the bottom of the doctor's song list, or in Library & splitting) is
+  added to song.ini's `charter` and `frets` credits, e.g. `charter = TomGuy,yourname`;
+  vocals charted on the review page add it to `charter`. It can also rebuild Hard, Medium and Easy from the fixed Expert, with
+  fewer notes when they come fast, smaller chords and fewer frets. **Restore the original
+  chart** puts `notes.mid.orig` and the song.ini credits back. Rescan your songs in YARG afterwards.
+
+Pitch tracking on distorted guitar can be off by an octave, and chords give it no single
+pitch. That's why it suggests and you decide. Only `notes.mid` songs and 5-fret guitar and
+bass are supported so far, and only Expert is edited directly (the easier difficulties can
+be rebuilt from it, which is a rough first pass). Pitch tracks are cached in `staging/doctor-cache/` (about 1 MB
+per stem).
 
 ## Manual setup and command line
 

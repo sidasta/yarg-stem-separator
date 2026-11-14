@@ -159,6 +159,76 @@ def ini_values(path):
     return {k.lower(): v.strip() for k, v in cp[section].items()} if section else {}
 
 
+def read_ini_lines(path):
+    """song.ini as (lines, how to write it back): its encoding, BOM and line endings are kept."""
+    raw = Path(path).read_bytes()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    try:
+        text, enc = raw.decode("utf-8-sig"), "utf-8"
+    except UnicodeDecodeError:
+        text, enc = raw.decode("cp1252", errors="replace"), "cp1252"
+    return text.splitlines(), {"enc": enc, "bom": bom, "nl": "\r\n" if b"\r\n" in raw else "\n"}
+
+
+def write_ini_lines(path, lines, fmt):
+    data = fmt["nl"].join(lines) + fmt["nl"]
+    Path(path).write_bytes((b"\xef\xbb\xbf" if fmt["bom"] else b"") + data.encode(fmt["enc"], errors="replace"))
+
+
+def _song_section(lines):
+    """(index of the [song] header, index after its last line); [song] is added if missing."""
+    head = next((i for i, line in enumerate(lines) if line.strip().lower() == "[song]"), None)
+    if head is None:
+        lines.insert(0, "[song]")
+        head = 0
+    end = next((i for i in range(head + 1, len(lines)) if lines[i].strip().startswith("[")), len(lines))
+    return head, end
+
+
+def _find_key(lines, key):
+    head, end = _song_section(lines)
+    pat = re.compile(rf"\s*{re.escape(key)}\s*=", re.I)
+    return next((i for i in range(head + 1, end) if pat.match(lines[i])), None), head
+
+
+def credit_lines(lines, name, keys=("charter",)):
+    """song.ini lines with name added to the credits in keys, e.g. charter = TomGuy -> TomGuy,sidasta.
+
+    The first key is added if song.ini doesn't have it; the others only where they're already
+    present. A name already in the list isn't added again. Returns (lines, changed)."""
+    name = (name or "").strip()
+    lines, changed = list(lines), False
+    if not name:
+        return lines, False
+    for n, key in enumerate(keys):
+        i, head = _find_key(lines, key)
+        if i is None:
+            if n == 0:
+                lines.insert(head + 1, f"{key} = {name}")
+                changed = True
+            continue
+        value = lines[i].split("=", 1)[1].strip()
+        if name.lower() not in (v.strip().lower() for v in re.split(r"[,&/;]", value)):
+            lines[i] = f"{key} = {value + ',' if value else ''}{name}"
+            changed = True
+    return lines, changed
+
+
+def set_ini_values(lines, values):
+    """song.ini lines with {key: value} set in [song]; a value of None removes the key."""
+    lines = list(lines)
+    for key, value in values.items():
+        i, head = _find_key(lines, key)
+        if value is None:
+            if i is not None:
+                del lines[i]
+        elif i is None:
+            lines.insert(head + 1, f"{key} = {value}")
+        else:
+            lines[i] = f"{key} = {value}"
+    return lines
+
+
 def _int(ini, key):
     try:
         return int(float(ini.get(key, "")))

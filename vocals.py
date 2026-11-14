@@ -325,10 +325,12 @@ def vocal_track(notes, overdrive_every=4):
     return track, len(lines)
 
 
-def write_song_ini(src, dst, extra=None):
+def write_song_ini(src, dst, extra=None, credit=None):
     """Copy song.ini with diff_vocals set, keeping its formatting and line endings.
 
-    extra: {key: value} to add, for settings song.ini doesn't have yet (made from scratch if src is missing)."""
+    extra: {key: value} to add, for settings song.ini doesn't have yet (made from scratch if src is missing).
+    credit: a charter name to add to the charter credits."""
+    import chartfile
     raw = src.read_bytes() if src.exists() else b"[song]\r\n"
     nl = b"\r\n" if b"\r\n" in raw else b"\n"
     lines = raw.decode("utf-8-sig", errors="replace").splitlines()
@@ -346,6 +348,7 @@ def write_song_ini(src, dst, extra=None):
             lines[:0] = ["[song]"]
             head = 0
         lines[head + 1:head + 1] = add
+    lines = chartfile.credit_lines(lines, credit, ("charter",))[0]
     dst.write_bytes(nl.join(s.encode("utf-8") for s in lines) + nl)
 
 
@@ -360,7 +363,7 @@ def delay_ms(chart_src):
     return chartfile.parse(src).offset * 1000 if src is not None and src.suffix == ".chart" else 0.0
 
 
-def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
+def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print, credit=None):
     """Write out_dir/notes.mid (chart_src's chart plus PART VOCALS) and song.ini. Returns a report.
 
     A notes.chart is converted to notes.mid; song.ini gains any settings the conversion needs."""
@@ -399,7 +402,7 @@ def chart(vocal_audio, sr, lyrics, chart_src, out_dir, log=print):
     out_dir.mkdir(parents=True)
     mid.save(str(out_dir / "notes.mid"))
     if (chart_src / "song.ini").exists() or extra:
-        write_song_ini(chart_src / "song.ini", out_dir / "song.ini", extra)
+        write_song_ini(chart_src / "song.ini", out_dir / "song.ini", extra, credit)
 
     # Where to look first when checking: lines the aligner was unsure of, and singing with no lyrics.
     unsure = []
@@ -471,7 +474,7 @@ def base_folder(staging, folder):
     return Path(staging) / base
 
 
-def add_vocals(staged, lyrics, log=print):
+def add_vocals(staged, lyrics, log=print, credit=None):
     """Chart vocals for a staged split from lyrics, then re-assemble it with vocals.ogg split out."""
     ok, why = available()
     if not ok:
@@ -483,7 +486,7 @@ def add_vocals(staged, lyrics, log=print):
     if not vocal_path.exists():
         raise ValueError("the model produced no vocal track for this song")
     audio, sr = stemsplit.read_audio(vocal_path)
-    report = chart(audio, sr, lyrics, chart_src, staged / CHART_DIR, log)
+    report = chart(audio, sr, lyrics, chart_src, staged / CHART_DIR, log, credit)
     report["source_sha1"] = _sha1(chart_src / report["source_file"])
     log("re-assembling the split with vocals")
     return _restage(staged, m, {**m["charted"], "vocals": True}, staged / CHART_DIR,
@@ -502,7 +505,7 @@ def remove_vocals(staged):
     return report
 
 
-def stage_committed(song_dir, staged, lyrics, source=None, original=None, log=print):
+def stage_committed(song_dir, staged, lyrics, source=None, original=None, log=print, credit=None):
     """Chart vocals for a song committed earlier, from the vocals.ogg in its folder.
 
     Stages the new chart (manifest kind "vocals") with copies of the song's tracks to listen
@@ -521,7 +524,7 @@ def stage_committed(song_dir, staged, lyrics, source=None, original=None, log=pr
     staged.mkdir(parents=True)
     try:
         audio, sr = stemsplit.read_audio(song_dir / "vocals.ogg")
-        report = chart(audio, sr, lyrics, song_dir, staged / CHART_DIR, log)
+        report = chart(audio, sr, lyrics, song_dir, staged / CHART_DIR, log, credit)
         report["source_sha1"] = _sha1(song_dir / report["source_file"])
         log("preparing the review")
         data = {n: stemsplit.read_audio(p)[0] for n, p in tracks.items()}

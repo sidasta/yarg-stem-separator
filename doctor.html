@@ -1,0 +1,1244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chart Doctor</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+    --accent: #3b6fd8; --accent-text: #ffffff; --keep: #2f8a4c; --warn: #c2571a; --danger: #b8322a;
+    --track: #ecebe6; --warn-bg: #fbefe6; --dot: 29, 29, 27; --lane: #f1f0ec; --lane2: #e9e8e3;
+    --grid: #d6d5cf; --beat: #c3c2bb; --bar: #9e9d96;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #20201e; --text: #ecebe6; --muted: #9b9a93; --line: #34332f;
+      --accent: #6d97ee; --accent-text: #0f0f0e; --keep: #5bbf7a; --warn: #ec8b52; --danger: #ef6b62;
+      --track: #2b2a27; --warn-bg: #3a2a1f; --dot: 236, 235, 230; --lane: #1b1b1a; --lane2: #242422;
+      --grid: #2c2c2a; --beat: #3d3d3a; --bar: #66655f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  nav { border-right: 1px solid var(--line); padding: 16px; background: var(--panel); height: 100vh; position: sticky; top: 0;
+    display: flex; flex-direction: column; min-height: 0; }
+  nav h1 { font-size: 15px; margin: 0 0 2px; }
+  nav .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  nav .sub a { color: var(--accent); }
+  .songs { flex: 1; overflow-y: auto; min-height: 0; }
+  .songs button { display: block; width: 100%; text-align: left; padding: 6px 9px; margin: 1px 0; border: 1px solid transparent;
+    border-radius: 6px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  .songs button:hover { border-color: var(--line); }
+  .songs button.active { background: var(--accent); color: var(--accent-text); }
+  .songs small { display: block; opacity: .75; font-size: 12px; }
+  .settings { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; flex: none; }
+  .settings h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .settings.ask { border: 1px solid var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 10px; }
+  main { padding: 20px 24px; min-width: 0; }
+  h2 { margin: 0 0 2px; font-size: 20px; }
+  h3 { margin: 0 0 8px; font-size: 14px; }
+  .meta { color: var(--muted); margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .flags { background: var(--warn-bg); border-color: var(--warn); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font: inherit; cursor: pointer; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary, .btn.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .btn.danger { color: var(--danger); border-color: var(--danger); }
+  .small { padding: 3px 8px; font-size: 12px; }
+  .hint, .note { color: var(--muted); font-size: 12px; }
+  .err { color: var(--danger); }
+  input[type=text] { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg);
+    color: var(--text); width: 100%; }
+  select { font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .time { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 90px; }
+  canvas { display: block; width: 100%; }
+  #overview { height: 38px; cursor: pointer; border-radius: 4px; margin-bottom: 6px; }
+  #timeline { height: 370px; cursor: crosshair; user-select: none; }
+  #template { height: 160px; cursor: pointer; }
+  .grid2 { display: grid; grid-template-columns: minmax(240px, 1fr) 2fr; gap: 12px; align-items: start; }
+  @media (max-width: 1000px) { .app { grid-template-columns: 1fr; } nav { position: static; height: auto; max-height: 50vh; } .grid2 { grid-template-columns: 1fr; } }
+  .riffs button { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; padding: 6px 8px; margin: 2px 0;
+    border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+  .riffs button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+  .riffs .grow { flex: 1; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; }
+  .tag.warn { color: var(--warn); } .tag.ok { color: var(--keep); } .tag.edit { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .map { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; margin: 10px 0; }
+  .frets { display: inline-flex; gap: 4px; }
+  .fret { width: 30px; height: 26px; border-radius: 13px; border: 2px solid var(--fc); background: none; cursor: pointer;
+    color: var(--text); font: 600 12px system-ui; }
+  .fret.on { background: var(--fc); color: #111; }
+  .pname { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pname small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  label.opt { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  input[type=range] { width: 90px; }
+  .progress { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .progress > div { height: 100%; background: var(--accent); width: 30%; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  .empty { color: var(--muted); padding: 40px 0; }
+  ul.flaglist { margin: 4px 0 0; padding-left: 18px; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+  details.keys summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  details.keys ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; columns: 2; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <h1>Chart Doctor</h1>
+    <div class="sub">Check and fix guitar and bass charts against their stems. <b>Experimental:</b> for adjusting charts you've played in game, not charting from scratch. <a href="/">Back to stem review</a></div>
+    <div class="row" style="flex-wrap:nowrap; margin-bottom:6px">
+      <input type="text" id="root" placeholder="Songs folder, e.g. D:\Games\YARG\Songs">
+      <button class="btn small" id="list">List</button>
+    </div>
+    <input type="text" id="filter" placeholder="Filter songs" style="margin-bottom:8px">
+    <div id="songs" class="songs"><div class="hint">Enter your songs folder and press List.</div></div>
+    <div class="settings" id="settings"></div>
+  </nav>
+  <main id="main"><div class="empty">Pick a song on the left.</div></main>
+</div>
+<script>
+const OPEN = 5;                                  // lane number of an open note
+const ROWS = [OPEN, 0, 1, 2, 3, 4];             // lanes top to bottom: P G R Y B O
+const COLOR = { 0: "#35b457", 1: "#e2463f", 2: "#e9c32b", 3: "#3d80e3", 4: "#f08b2d", 5: "#a35ee0" };
+const NAME = { 0: "G", 1: "R", 2: "Y", 3: "B", 4: "O", 5: "P" };
+const lanesText = lanes => lanes.map(l => NAME[l]).join("");
+const NAMES = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
+const RIFF_COLORS = ["#8a6fd8", "#2fa3a3", "#d86f9b", "#c2571a", "#5f8f2f", "#3b6fd8", "#b08a1e", "#9b4fc0"];
+const DEFAULT_LANES = { 1: [0], 2: [0, 1], 3: [0, 1, 2], 4: [0, 1, 2, 3], 5: [0, 1, 2, 3, 4] };
+const GRIDS = [4, 8, 12, 16, 24, 32, 48, 64];   // snap to 1/N notes
+const VOICED = 0.5, LOUD = -38;  // a pitch frame counts when CREPE is this sure and it's this loud (dB below peak)
+
+const $ = (s, el = document) => el.querySelector(s);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = t => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
+const pname = m => { const r = Math.round(m); return NAMES[((r % 12) + 12) % 12] + (Math.floor(r / 12) - 1); };
+const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : NaN; };
+const pct = x => `${Math.round(x * 100)}%`;
+const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+
+async function getJSON(path) {
+  const r = await fetch(path); const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+async function postTo(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Stem-Review": "1" },
+                              body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+const post = (action, body) => postTo(`/api/doctor/${action}`, body);
+
+// ------------------------------------------------------------------ state
+let S = { songs: [], settings: null };   // everything about the open song lives here
+let actx = null, buffers = {}, sources = [], gains = {}, playing = false, startedAt = 0, startPos = 0, loop = null, pos = 0;
+
+// ------------------------------------------------------------------ settings (bottom of the nav)
+async function loadSettings() {
+  try { S.settings = (await getJSON("/api/settings")).settings; } catch { S.settings = { charter_name: "" }; }
+  renderSettings();
+}
+function renderSettings(msg = "") {
+  const el = $("#settings"), name = S.settings?.charter_name || "";
+  el.className = `settings${name ? "" : " ask"}`;
+  el.innerHTML = `<h4>Settings</h4>
+    <label for="charter" style="font-size:12px">Your charter name</label>
+    <div class="row" style="flex-wrap:nowrap; margin-top:4px"><input type="text" id="charter" value="${esc(name)}" placeholder="e.g. your alias">
+      <button class="btn small" id="charter-save">Save</button></div>
+    <div class="hint" style="margin-top:4px">${msg ? esc(msg) : name ? `Saving a chart adds <b>${esc(name)}</b> to its charter credit in song.ini.`
+      : "Set this to be credited in song.ini when you save a chart (or chart vocals on the review page)."}</div>`;
+  const saveName = async () => {
+    try { S.settings = (await postTo("/api/settings", { charter_name: $("#charter").value })).settings; renderSettings("Saved."); if (S.chart) renderSave(); }
+    catch (e) { renderSettings(e.message); }
+  };
+  $("#charter-save").onclick = saveName;
+  $("#charter").onkeydown = e => { if (e.key === "Enter") saveName(); };
+}
+
+// ------------------------------------------------------------------ song list
+async function listSongs() {
+  const root = $("#root").value.trim();
+  if (!root) return;
+  $("#songs").innerHTML = `<div class="hint">Looking for songs…</div><div class="progress"><div></div></div>`;
+  try {
+    const r = await getJSON(`/api/doctor/songs?root=${encodeURIComponent(root)}`);
+    store.set("doctor-root", root);
+    S.songs = r.songs;
+    renderSongs();
+  } catch (e) { $("#songs").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+}
+function renderSongs() {
+  const f = $("#filter").value.trim().toLowerCase();
+  const list = S.songs.filter(s => !f || `${s.artist} ${s.name}`.toLowerCase().includes(f));
+  $("#songs").innerHTML = list.length ? list.slice(0, 400).map(s => `
+    <button data-path="${esc(s.path)}" class="${s.path === S.path ? "active" : ""}">${esc(s.name)}
+      <small>${esc(s.artist)}${s.stems.length ? "" : " · no stems yet"}${s.edited ? " · edited" : ""}</small></button>`).join("")
+    + (list.length > 400 ? `<div class="hint">${list.length - 400} more; filter to find them.</div>` : "")
+    : `<div class="hint">${S.songs.length ? "No songs match." : "Enter your songs folder and press List."}</div>`;
+}
+$("#songs").addEventListener("click", e => { const b = e.target.closest("button"); if (b) openSong(b.dataset.path); });
+$("#list").onclick = listSongs;
+$("#root").addEventListener("keydown", e => { if (e.key === "Enter") listSongs(); });
+$("#filter").addEventListener("input", renderSongs);
+
+// ------------------------------------------------------------------ timing
+function buildTiming() {
+  const { tpb, tempos, time_signatures: ts, end_tick } = S.chart;
+  S.tempoSegs = []; let sec = 0;
+  for (let i = 0; i < tempos.length; i++) {
+    if (i) sec += (tempos[i][0] - tempos[i - 1][0]) / tpb * tempos[i - 1][1] / 1e6;
+    S.tempoSegs.push([tempos[i][0], sec, tempos[i][1]]);
+  }
+  const bars = [], beatLen = []; let tick = 0, i = 0;
+  while (tick <= end_tick + tpb * 8) {  // a couple of spare bars, for notes added after the last one
+    while (i + 1 < ts.length && ts[i + 1][0] <= tick) i++;
+    let len = tpb * 4 * ts[i][1] / ts[i][2];
+    if (i + 1 < ts.length && ts[i + 1][0] < tick + len) len = ts[i + 1][0] - tick;
+    bars.push(tick); beatLen.push(tpb * 4 / ts[i][2]); tick += len;
+  }
+  bars.push(tick);
+  S.bars = bars; S.beatLen = beatLen; S.barSec = bars.map(secOf);
+}
+function secOf(tick) {
+  const segs = S.tempoSegs; let lo = 0, hi = segs.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (segs[m][0] <= tick) lo = m; else hi = m - 1; }
+  const [t, s, us] = segs[lo];
+  return s + (tick - t) / S.chart.tpb * us / 1e6;
+}
+function tickAt(sec) {
+  const segs = S.tempoSegs; let lo = 0, hi = segs.length - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (segs[m][1] <= sec) lo = m; else hi = m - 1; }
+  const [t, s, us] = segs[lo];
+  return t + (sec - s) * 1e6 / us * S.chart.tpb;
+}
+function barOf(tick) {
+  let lo = 0, hi = S.bars.length - 2;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (S.bars[m] <= tick) lo = m; else hi = m - 1; }
+  return lo;
+}
+// The snap grid: 1/N notes, picked from the zoom level unless chosen.
+function gridDiv() {
+  if (S.grid !== "auto") return +S.grid;
+  const mid = tickAt(S.view.t0 + S.view.span / 2), tpb = S.chart.tpb;
+  const pxPerBeat = (S.W || 1000) / S.view.span * (secOf(mid + tpb) - secOf(mid));
+  let best = 4;
+  for (const n of [4, 8, 16, 32, 64]) if (pxPerBeat * 4 / n >= 18) best = n;
+  return best;
+}
+const gridStep = () => S.chart.tpb * 4 / gridDiv();
+function snapTick(tick) {
+  tick = Math.max(0, tick);
+  if (!S.snap) return Math.round(tick);
+  const b = barOf(tick), step = gridStep();
+  return Math.round(S.bars[b] + Math.round((tick - S.bars[b]) / step) * step);
+}
+
+// ------------------------------------------------------------------ notes
+const noteOf = raw => ({ tick: raw.tick, len: raw.len, lanes: [...raw.lanes], force: raw.force || null, tap: !!raw.tap,
+                         lens: raw.lens || null, t: secOf(raw.tick) });
+const clone = n => ({ ...n, lanes: [...n.lanes] });
+function findIdx(tick, notes = S.notes) {
+  let lo = 0, hi = notes.length - 1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (notes[m].tick === tick) return m; if (notes[m].tick < tick) lo = m + 1; else hi = m - 1; }
+  return -1;
+}
+const noteAt = tick => { const i = findIdx(tick); return i >= 0 ? S.notes[i] : null; };
+function insertNote(n) {
+  let i = S.notes.findIndex(x => x.tick > n.tick); if (i < 0) i = S.notes.length;
+  S.notes.splice(i, 0, n);
+}
+function removeAt(tick) { const i = findIdx(tick); if (i >= 0) S.notes.splice(i, 1); }
+const noSustain = () => Math.round(S.chart.tpb / 8);
+function changed(n) {
+  const o = S.origByTick.get(n.tick);
+  return !o || o.lanes.join() !== n.lanes.join() || o.len !== n.len || (o.force || null) !== (n.force || null);
+}
+function changeCounts() {
+  let added = 0, edited = 0;
+  for (const n of S.notes) { if (!S.origByTick.has(n.tick)) added++; else if (changed(n)) edited++; }
+  const removed = S.orig.filter(o => findIdx(o.tick) < 0).length;
+  return { added, edited, removed, total: added + edited + removed };
+}
+// Natural HOPO, as the games decide it for notes.mid: a single note soon after the one before,
+// on a different fret. Forced markers and taps override it.
+function hopoKind(i, notes = S.notes) {
+  const n = notes[i];
+  if (n.tap) return "tap";
+  if (n.force === "H") return "hopo";
+  if (n.force === "S") return "strum";
+  return naturalHopo(i, notes) ? "hopo" : "strum";
+}
+function naturalHopo(i, notes = S.notes) {
+  const n = notes[i], p = notes[i - 1];
+  if (!p || n.lanes.length !== 1 || n.tick - p.tick > S.chart.hopo_threshold) return false;
+  return p.lanes.length > 1 || p.lanes[0] !== n.lanes[0];
+}
+
+// ------------------------------------------------------------------ undo
+function snapshot() { S.undo.push(S.notes.map(clone)); S.redo = []; if (S.undo.length > 300) S.undo.shift(); }
+function undo() { if (!S.undo.length) return; S.redo.push(S.notes.map(clone)); S.notes = S.undo.pop(); renderAll(); }
+function redo() { if (!S.redo.length) return; S.undo.push(S.notes.map(clone)); S.notes = S.redo.pop(); renderAll(); }
+
+// ------------------------------------------------------------------ open a song
+async function openSong(path, inst) {
+  stopAudio(); buffers = {}; loop = null; pos = 0;
+  S.path = path; renderSongs();
+  history.replaceState(null, "", `?song=${encodeURIComponent(path)}${inst ? `&inst=${inst}` : ""}`);
+  $("#main").innerHTML = `<div class="empty">Reading the chart…</div>`;
+  try { S.chart = await getJSON(`/api/doctor/chart?song=${encodeURIComponent(path)}`); }
+  catch (e) { $("#main").innerHTML = `<div class="empty err">${esc(e.message)}</div>`; return; }
+  const insts = Object.keys(S.chart.instruments);
+  if (!insts.length) { $("#main").innerHTML = `<div class="empty">This chart has no guitar or bass notes.</div>`; return; }
+  buildTiming();
+  openInstrument(insts.includes(inst) ? inst : insts[0]);
+}
+
+function openInstrument(inst, keep = null) {
+  if (!keep) { stopAudio(); loop = null; buffers = {}; }  // the band mix is everything but this instrument's stem
+  S.inst = inst;
+  const d = S.chart.instruments[inst];
+  S.orig = d.difficulties[3].map(noteOf);
+  S.origByTick = new Map(S.orig.map(n => [n.tick, n]));
+  S.notes = S.orig.map(clone);
+  S.undo = []; S.redo = []; S.picked = new Set(); S.hover = null; S.drag = null; S.pcache = new Map();
+  S.hardCopy = sameNotes(d.difficulties[2], d.difficulties[3]);
+  S.rebuild = keep ? false : S.hardCopy;
+  S.snap = S.snap ?? true; S.grid = S.grid ?? "auto";
+  S.riffs = findRiffs();
+  if (keep) {
+    S.sel = Math.min(keep.sel, S.riffs.length - 1); S.view = keep.view;
+    if (S.pitch) S.riffs.forEach(analyseRiff);
+  } else {
+    S.pitch = null; S.pitchState = d.stem ? "loading" : "nostem"; S.sel = S.riffs.length ? 0 : -1;
+    const first = S.notes.length ? S.notes[0].t : 0;
+    S.view = { t0: Math.max(0, (S.riffs[0] ? S.barSec[S.riffs[0].starts[0]] : first) - 1), span: 14 };
+  }
+  history.replaceState(null, "", `?song=${encodeURIComponent(S.path)}&inst=${inst}`);
+  renderPage();
+  if (!keep && d.stem) { loadPitch(); loadAudio(d.stem, "_stem"); }
+}
+
+// ------------------------------------------------------------------ riffs
+// A riff is a run of 1, 2 or 4 bars whose chart notes repeat exactly (same rhythm, same frets)
+// at least three times, found in the chart as opened. Its repeats are bar ranges, so edits to
+// one repeat (adding, removing, re-fretting) can be made at the same spot in every other.
+function findRiffs() {
+  const notes = S.orig, bars = S.bars, nb = bars.length - 1, first = [];
+  for (let b = 0, j = 0; b <= nb; b++) { while (j < notes.length && notes[j].tick < bars[b]) j++; first.push(j); }
+  const used = new Uint8Array(nb), riffs = [];
+  const sig = (b, L) => {
+    const a = first[b], z = first[b + L];
+    if (z - a < 3) return null;
+    let s = `${bars[b + L] - bars[b]}|`;
+    for (let k = a; k < z; k++) s += `${notes[k].tick - bars[b]}:${notes[k].lanes.join("")},`;
+    return s;
+  };
+  for (let round = 0; round < 12; round++) {
+    let best = null;
+    for (const L of [1, 2, 4]) {
+      const found = new Map();
+      for (let b = 0; b + L <= nb; b++) {
+        let free = true;
+        for (let k = b; k < b + L; k++) if (used[k]) { free = false; break; }
+        const s = free && sig(b, L);
+        if (s) (found.get(s) || found.set(s, []).get(s)).push(b);
+      }
+      for (const starts of found.values()) {
+        const chosen = []; let last = -1;
+        for (const b of starts) if (b >= last) { chosen.push(b); last = b + L; }
+        if (chosen.length < 3) continue;
+        const score = chosen.length * (first[chosen[0] + L] - first[chosen[0]]);
+        if (!best || score > best.score) best = { L, starts: chosen, score };
+      }
+    }
+    if (!best || best.score < 16) break;
+    for (const b of best.starts) for (let k = b; k < b + best.L; k++) used[k] = 1;
+    riffs.push({ L: best.L, starts: best.starts,
+                 origInst: best.starts.map(b => Array.from({ length: first[b + best.L] - first[b] }, (_, k) => first[b] + k)) });
+  }
+  riffs.sort((a, b) => a.starts[0] - b.starts[0]);
+  riffs.forEach((r, i) => { r.id = i; r.color = RIFF_COLORS[i % RIFF_COLORS.length]; });
+  return riffs;
+}
+const winOf = (r, k) => [S.bars[r.starts[k]], S.bars[r.starts[k] + r.L]];
+function riffAt(tick) {
+  for (const r of S.riffs) for (let k = 0; k < r.starts.length; k++) {
+    const [a, z] = winOf(r, k);
+    if (tick >= a && tick < z) return { r, k, rel: tick - a };
+  }
+  return null;
+}
+const allRepeats = () => { const c = $("#allrep"); return !c || c.checked; };
+// The ticks an edit at tick applies to: the same spot in every repeat of its riff, if it's in one.
+function repeatsOf(tick, force = false) {
+  const w = (force || allRepeats()) && riffAt(tick);
+  return w ? w.r.starts.map(b => S.bars[b] + w.rel) : [tick];
+}
+const notesIn = (a, z) => S.notes.filter(n => n.tick >= a && n.tick < z);
+function riffEdited(r) {
+  return r.starts.some((_, k) => {
+    const [a, z] = winOf(r, k);
+    return notesIn(a, z).some(changed) || S.orig.some(o => o.tick >= a && o.tick < z && findIdx(o.tick) < 0);
+  });
+}
+
+// What the stem plays at a note: the median pitch over its first ~quarter second (until the next note).
+function pitchOf(notes, i) {
+  if (!S.pitch) return null;
+  const n = notes[i], next = notes[i + 1], key = `${n.tick}|${next ? next.tick : ""}`;
+  if (S.pcache.has(key)) return S.pcache.get(key);
+  const { hop, midi, conf, level } = S.pitch, t = n.t ?? secOf(n.tick);
+  const a = Math.round((t + 0.03) / hop), z = Math.round((Math.min(next ? secOf(next.tick) : t + 0.4, t + 0.3) - 0.01) / hop);
+  const vals = [];
+  for (let f = a; f < z && f < midi.length; f++) if (conf[f] >= VOICED && level[f] >= LOUD && midi[f] > 0) vals.push(midi[f]);
+  let out = null;
+  if (vals.length >= 3) { const m = median(vals); out = { midi: m, pc: ((Math.round(m) % 12) + 12) % 12 }; }
+  S.pcache.set(key, out);
+  return out;
+}
+
+// Per riff (as opened): the pitch at each step, voted over every repeat (which evens out a bad
+// reading here and there), the distinct notes it uses, and a suggested fret for each.
+function analyseRiff(r) {
+  r.rels = r.origInst[0].map(i => S.orig[i].tick - S.bars[r.starts[0]]);
+  r.slots = r.origInst[0].map((i0, j) => {
+    const chord = S.orig[i0].lanes.length > 1 || S.orig[i0].lanes[0] === OPEN;
+    const vals = r.origInst.map(inst => pitchOf(S.orig, inst[j])).filter(Boolean);
+    const votes = new Array(12).fill(0); vals.forEach(v => votes[v.pc]++);
+    const pc = votes.indexOf(Math.max(...votes));
+    const ok = vals.length >= 2 && votes[pc] >= Math.max(2, 0.5 * vals.length);
+    return { chord, pitch: ok ? { pc, midi: median(vals.filter(v => v.pc === pc).map(v => v.midi)),
+                                   agree: votes[pc] / r.origInst.length } : null };
+  });
+  const groups = new Map();
+  r.slots.forEach((s, j) => {
+    if (!s.pitch || s.chord) return;
+    const g = groups.get(s.pitch.pc) || groups.set(s.pitch.pc, { pc: s.pitch.pc, heights: [], slots: [] }).get(s.pitch.pc);
+    g.heights.push(s.pitch.midi); g.slots.push(j);
+  });
+  r.groups = [...groups.values()].map(g => ({ ...g, midi: median(g.heights) })).sort((a, b) => a.midi - b.midi);
+  r.map = {};
+  const k = r.groups.length;
+  r.groups.forEach((g, i) => r.map[g.pc] = k <= 5 ? DEFAULT_LANES[k][i] : Math.round(i * 4 / (k - 1)));
+}
+function applySuggestion(r) {
+  if (!r.slots) return;
+  r.starts.forEach(b => r.slots.forEach((s, j) => {
+    if (!s.pitch || s.chord) return;
+    const n = noteAt(S.bars[b] + r.rels[j]);
+    if (n) { n.lanes = [r.map[s.pitch.pc]]; n.lens = null; }
+  }));
+}
+// Distinct notes vs frets in the chart as opened: the auto-charter tell.
+function riffProblem(r) {
+  if (!r.groups) return null;
+  const inst = r.origInst[0];
+  const lanesOf = g => new Set(g.slots.map(j => S.orig[inst[j]].lanes[0]));
+  const split = r.groups.filter(g => lanesOf(g).size > 1);
+  const used = new Set(r.groups.flatMap(g => [...lanesOf(g)]));
+  if (split.length) return `${split.map(g => NAMES[g.pc]).join(", ")} on more than one fret`;
+  if (r.groups.length > used.size) return `${r.groups.length} notes on ${used.size} fret${used.size > 1 ? "s" : ""}`;
+  return null;
+}
+
+// ------------------------------------------------------------------ edits (each applies to every repeat when asked)
+function setLanes(n, lane, add) {
+  const cur = n.lanes;
+  if (!add || lane === OPEN || cur.includes(OPEN)) n.lanes = [lane];  // an open note is never part of a chord
+  else if (cur.includes(lane)) { if (cur.length > 1) n.lanes = cur.filter(l => l !== lane); }
+  else n.lanes = [...cur, lane].sort((a, b) => a - b);
+  n.lens = null;
+}
+function editLane(tick, lane, add, forceRepeats = false) {
+  for (const t of repeatsOf(tick, forceRepeats)) { const n = noteAt(t); if (n) setLanes(n, lane, add); }
+}
+function addNote(tick, lane, forceRepeats = false) {
+  for (const t of repeatsOf(tick, forceRepeats)) {
+    const n = noteAt(t);
+    if (n) setLanes(n, lane, true);
+    else insertNote({ tick: t, len: noSustain(), lanes: [lane], force: null, tap: false, lens: null, t: secOf(t) });
+  }
+}
+function deleteNotes(ticks) {
+  for (const t of ticks) { removeAt(t); S.picked.delete(t); }
+}
+function setLength(tick, len, forceRepeats = false) {
+  for (const t of repeatsOf(tick, forceRepeats)) { const n = noteAt(t); if (n) { n.len = len; n.lens = null; } }
+}
+// Toggle HOPO / strum: force it only where the natural rule says otherwise.
+function setHopo(ticks, want) {
+  for (const t of ticks) {
+    const i = findIdx(t); if (i < 0 || S.notes[i].tap) continue;
+    const natural = naturalHopo(i) ? "hopo" : "strum";
+    S.notes[i].force = want === "auto" || want === natural ? null : want === "hopo" ? "H" : "S";
+  }
+}
+// Ticks to act on from the keyboard / selection bar: the selection, else the note under the pointer.
+function targets() {
+  if (S.picked.size) return [...S.picked].filter(t => findIdx(t) >= 0);
+  if (S.hover != null && noteAt(S.hover)) return repeatsOf(S.hover);
+  return [];
+}
+
+// ------------------------------------------------------------------ diagnosis
+function diagnose(notes) {
+  const singles = notes.filter(n => n.lanes.length === 1 && n.lanes[0] !== OPEN);
+  const counts = [0, 0, 0, 0, 0]; singles.forEach(n => counts[n.lanes[0]]++);
+  const sorted = [...counts].sort((a, b) => b - a);
+  const out = { notes: notes.length, two: singles.length ? (sorted[0] + sorted[1]) / singles.length : 0,
+                top: counts.map((c, i) => [c, i]).sort((a, b) => b[0] - a[0]).slice(0, 2).map(x => NAME[x[1]]).join(" + "),
+                frets: counts.filter(Boolean).length, same: 0, sameMoved: 0 };
+  if (S.pitch) for (let i = 1; i < notes.length; i++) {
+    const a = notes[i - 1], b = notes[i];
+    if (a.lanes.length !== 1 || b.lanes.length !== 1 || secOf(b.tick) - secOf(a.tick) > 0.6) continue;
+    const pa = pitchOf(notes, i - 1), pb = pitchOf(notes, i);
+    if (pa && pb && pa.pc === pb.pc) { out.same++; if (a.lanes[0] !== b.lanes[0]) out.sameMoved++; }
+  }
+  return out;
+}
+// Same notes and frets (sustain lengths aside): Hard copied from Expert.
+const sameNotes = (a, b) => a.length === b.length && a.every((n, i) => n.tick === b[i].tick && n.lanes.join() === b[i].lanes.join());
+function renderDiagnosis() {
+  const a = diagnose(S.orig), b = diagnose(S.notes), flags = [];
+  const jumpy = S.pitch && a.same >= 20 && a.sameMoved / a.same > 0.3, bad = S.riffs.filter(r => riffProblem(r));
+  // Two frets for most of a song is only suspicious on its own when there's no stem to compare
+  // with; a riff that really is mostly one note is fine.
+  if (a.notes > 80 && a.two >= 0.85 && (!S.pitch || jumpy || bad.length))
+    flags.push(`${pct(a.two)} of the notes are on just two frets (${a.top}).`);
+  if (jumpy) flags.push(`When the stem plays the same note twice in a row, the chart changes fret ${pct(a.sameMoved / a.same)} of the time.`);
+  if (bad.length) flags.push(`${bad.length} of ${S.riffs.length} repeated riff${S.riffs.length > 1 ? "s" : ""} don't follow the stem's notes (${bad.map(r => `riff ${r.id + 1}: ${riffProblem(r)}`).join("; ")}).`);
+  if (S.hardCopy) flags.push("Hard is an exact copy of Expert.");
+  const row = (label, x, y) => `<tr><td>${label}</td><td class="num">${x}</td><td class="num">${y}</td></tr>`;
+  const same = d => d.same ? `${pct(d.sameMoved / d.same)} <span class="hint">of ${d.same}</span>` : "–";
+  const c = changeCounts();
+  $("#diagnosis").className = `card${flags.length ? " flags" : ""}`;
+  $("#diagnosis").innerHTML = `
+    <h3>${flags.length ? "This chart looks off" : S.pitch ? "Nothing obviously wrong" : "Diagnosis"}</h3>
+    ${flags.length ? `<ul class="flaglist">${flags.map(f => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+    ${S.pitchState === "loading" ? `<div class="hint">Listening to the stem… (about 10 seconds with a GPU, once per song)</div><div class="progress"><div></div></div>` : ""}
+    ${S.pitchState === "nostem" ? `<div class="hint">There's no ${S.inst === "bass" ? "rhythm.ogg" : "guitar.ogg"} stem, so only the chart itself can be checked. Split the song first.</div>` : ""}
+    ${S.pitchState && S.pitchState.error ? `<div class="err">${esc(S.pitchState.error)}</div>` : ""}
+    <table style="margin-top:8px"><tr><th></th><th>As opened</th><th>Now</th></tr>
+      ${row("Expert notes", a.notes, b.notes)}
+      ${row("Expert notes on the two busiest frets", `${pct(a.two)} <span class="hint">${a.top}</span>`, `${pct(b.two)} <span class="hint">${b.top}</span>`)}
+      ${row("Frets used", a.frets, b.frets)}
+      ${S.pitch ? row("Same note repeated, but the fret changes", same(a), same(b)) : ""}
+      ${row("Notes changed", "", c.total ? `${c.total} <span class="hint">(${c.edited} edited, ${c.added} added, ${c.removed} removed)</span>` : 0)}
+    </table>`;
+}
+
+// ------------------------------------------------------------------ page
+function renderPage() {
+  const c = S.chart, info = c.info, insts = Object.keys(c.instruments);
+  $("#main").innerHTML = `
+    <h2>${esc(info.name || "Untitled")}</h2>
+    <div class="meta">${esc(info.artist)}${info.charter ? ` · charted by ${esc(info.charter)}` : ""}
+      ${info.delay && +info.delay ? ` · <span class="err">song.ini delay = ${esc(info.delay)} ms, so the notes may sit a little off the audio here</span>` : ""}</div>
+    <div class="row" style="margin-bottom:12px">
+      ${insts.map(i => `<button class="btn ${i === S.inst ? "on" : ""}" data-inst="${i}">${i === "guitar" ? "Guitar" : "Bass"}</button>`).join("")}
+    </div>
+    <div id="diagnosis" class="card"></div>
+    <div class="card">
+      <canvas id="overview"></canvas>
+      <canvas id="timeline"></canvas>
+      <div class="row" style="margin-top:8px">
+        <button class="btn primary" id="play">Play</button>
+        <span class="time" id="time">0:00.0</span>
+        <label class="opt">${S.inst === "bass" ? "Bass" : "Guitar"} <input type="range" id="vstem" min="0" max="1" step="0.05" value="1"></label>
+        <label class="opt">Band <input type="range" id="vband" min="0" max="1" step="0.05" value="0"></label>
+        <span class="sep"></span>
+        <label class="opt" title="New notes, moves and sustains land on the grid (S)"><input type="checkbox" id="snap" ${S.snap ? "checked" : ""}> Snap to</label>
+        <select id="grid" title="Grid size: Auto follows the zoom">${["auto", ...GRIDS].map(g => `<option value="${g}" ${String(S.grid) === String(g) ? "selected" : ""}>${g === "auto" ? "Auto" : `1/${g}`}</option>`).join("")}</select>
+        <span class="hint" id="gridnow"></span>
+        <button class="btn small" id="zoomout" title="Zoom out (-)">−</button>
+        <button class="btn small" id="zoomin" title="Zoom in (+)">+</button>
+        <span class="sep"></span>
+        <label class="opt"><input type="checkbox" id="ghost"> Show original</label>
+        <label class="opt" title="When you edit a note that's part of a riff, make the same change in every repeat"><input type="checkbox" id="allrep" ${S.allrep === false ? "" : "checked"}> Riff edits change every repeat</label>
+      </div>
+      <div class="row" id="selbar" style="margin-top:8px; min-height:30px"></div>
+      <details class="keys" style="margin-top:6px"><summary>Mouse and keys</summary><ul>
+        <li>Click an empty spot in a lane: add a note (on the grid when Snap is on)</li>
+        <li>Click a note's column in another lane: move it there; Shift-click: add or remove that fret (chord)</li>
+        <li>Click a note: select it; Ctrl-click: add it to the selection; drag across notes: select them</li>
+        <li>Drag sideways from a note: set its sustain</li>
+        <li>Right-click a note, or <kbd>Del</kbd>: remove it</li>
+        <li><kbd>H</kbd>: switch HOPO / strum (white dot = HOPO, hollow = tap)</li>
+        <li><kbd>↑</kbd> <kbd>↓</kbd>: move selected notes a fret; <kbd>←</kbd> <kbd>→</kbd>: move them a grid step in time</li>
+        <li>The top lane (P) is open notes</li>
+        <li>Click above the lanes: seek · <kbd>Space</kbd>: play</li>
+        <li>Shift+wheel or the strip at the top: move along · Ctrl+wheel or <kbd>+</kbd> <kbd>−</kbd>: zoom</li>
+        <li><kbd>S</kbd>: snap on/off · <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd>: undo / redo · <kbd>Esc</kbd>: clear selection</li>
+      </ul></details>
+    </div>
+    <div class="grid2">
+      <div class="card"><h3>Repeated riffs</h3><div id="riffs" class="riffs"></div></div>
+      <div class="card" id="editor"></div>
+    </div>
+    <div class="card" id="savecard"></div>`;
+  $("#main").querySelectorAll("[data-inst]").forEach(b => b.onclick = () => openInstrument(b.dataset.inst));
+  $("#play").onclick = () => playing ? pauseAudio() : playAudio(pos);
+  $("#vstem").oninput = e => gains._stem && (gains._stem.gain.value = +e.target.value);
+  $("#vband").oninput = e => { if (+e.target.value > 0) loadBand(); if (gains._band) gains._band.gain.value = +e.target.value; };
+  $("#ghost").onchange = e => { S.ghost = e.target.checked; draw(); };
+  $("#allrep").onchange = e => { S.allrep = e.target.checked; };
+  $("#snap").onchange = e => { S.snap = e.target.checked; draw(); };
+  $("#grid").onchange = e => { S.grid = e.target.value; draw(); };
+  $("#zoomin").onclick = () => zoom(1 / 1.5);
+  $("#zoomout").onclick = () => zoom(1.5);
+  setupTimeline();
+  renderAll();
+}
+function renderAll() { renderDiagnosis(); renderRiffs(); renderEditor(); renderSelBar(); renderSave(); draw(); }
+function zoom(f, atSec) {
+  const v = S.view, c = atSec ?? (playing ? currentPos() : v.t0 + v.span / 2), frac = (c - v.t0) / v.span;
+  v.span = Math.min(90, Math.max(0.8, v.span * f));
+  v.t0 = Math.max(0, c - frac * v.span);
+  draw();
+}
+
+// ------------------------------------------------------------------ selection bar
+function renderSelBar(msg = "") {
+  const el = $("#selbar"); if (!el) return;
+  const ticks = [...S.picked].filter(t => findIdx(t) >= 0), n = ticks.length;
+  if (!n) {
+    el.innerHTML = `<span class="hint">Drag across notes to select them (Shift-drag adds more, Ctrl+A selects all), then move, re-fret,
+      delete or change them together.</span>${msg ? ` <span class="err">${esc(msg)}</span>` : ""}`;
+    return;
+  }
+  const kinds = new Set(ticks.map(t => hopoKind(findIdx(t))));
+  el.innerHTML = `<b>${n} selected</b>
+    <button class="btn small" id="selup" title="↑">↑ Fret toward green</button>
+    <button class="btn small" id="seldown" title="↓">↓ Toward orange</button>
+    <span class="frets">${ROWS.map(l => `<button class="fret" style="--fc:${COLOR[l]}" data-sellane="${l}" title="Put them all on ${NAME[l] === "P" ? "open" : NAME[l]}">${NAME[l]}</button>`).join("")}</span>
+    <span class="sep"></span>
+    <button class="btn small ${kinds.size === 1 && kinds.has("hopo") ? "on" : ""}" id="selhopo" title="H">HOPO</button>
+    <button class="btn small ${kinds.size === 1 && kinds.has("strum") ? "on" : ""}" id="selstrum">Strum</button>
+    <button class="btn small" id="selauto" title="Let the natural HOPO rule decide">Auto</button>
+    <button class="btn small" id="selnosus">No sustain</button>
+    <button class="btn small danger" id="seldel" title="Del">Delete</button>
+    <button class="btn small" id="selclear" title="Esc">Clear</button>
+    ${msg ? `<span class="err">${esc(msg)}</span>` : `<span class="hint">← → move them in time</span>`}`;
+  $("#selup").onclick = () => shiftPicked(-1);
+  $("#seldown").onclick = () => shiftPicked(1);
+  $("#selclear").onclick = () => { S.picked.clear(); renderSelBar(); draw(); };
+  $("#selhopo").onclick = () => { snapshot(); setHopo(ticks, "hopo"); renderAll(); };
+  $("#selstrum").onclick = () => { snapshot(); setHopo(ticks, "strum"); renderAll(); };
+  $("#selauto").onclick = () => { snapshot(); setHopo(ticks, "auto"); renderAll(); };
+  $("#selnosus").onclick = () => { snapshot(); ticks.forEach(t => { const x = noteAt(t); x.len = noSustain(); x.lens = null; }); renderAll(); };
+  $("#seldel").onclick = () => { snapshot(); deleteNotes(ticks); renderAll(); };
+  el.querySelectorAll("[data-sellane]").forEach(b => b.onclick = () => {
+    snapshot(); ticks.forEach(t => setLanes(noteAt(t), +b.dataset.sellane, false)); renderAll();
+  });
+}
+function shiftPicked(d) {
+  const notes = [...S.picked].map(noteAt).filter(n => n && !n.lanes.includes(OPEN));
+  if (!notes.length) return;
+  if (notes.some(n => n.lanes.some(l => l + d < 0 || l + d > 4))) { renderSelBar(`Some of them are already on ${d < 0 ? "green" : "orange"}.`); return; }
+  snapshot();
+  notes.forEach(n => { n.lanes = n.lanes.map(l => l + d); n.lens = null; });
+  renderAll();
+}
+function nudgePicked(dir) {
+  const ticks = [...S.picked].filter(t => findIdx(t) >= 0).sort((a, b) => a - b);
+  if (!ticks.length) return;
+  const step = S.snap ? gridStep() : S.chart.tpb / 16;
+  const moved = ticks.map(t => Math.round(t + dir * step));
+  if (moved.some(t => t < 0)) return;
+  const others = new Set(S.notes.map(n => n.tick).filter(t => !S.picked.has(t)));
+  if (moved.some(t => others.has(t))) { renderSelBar("There's already a note where that would move one."); return; }
+  snapshot();
+  const notes = ticks.map(noteAt);
+  notes.forEach(n => removeAt(n.tick));
+  S.picked = new Set(moved);
+  notes.forEach((n, i) => { n.tick = moved[i]; n.t = secOf(n.tick); insertNote(n); });
+  renderAll();
+}
+
+// ------------------------------------------------------------------ riffs panel
+function renderRiffs() {
+  const el = $("#riffs");
+  if (!S.riffs.length) { el.innerHTML = `<div class="hint">No part of this chart repeats exactly three or more times.</div>`; return; }
+  const total = S.orig.length;
+  const covered = S.riffs.reduce((s, r) => s + r.origInst.length * r.origInst[0].length, 0);
+  el.innerHTML = S.riffs.map(r => {
+    const prob = riffProblem(r), edited = riffEdited(r);
+    return `<button data-riff="${r.id}" class="${r.id === S.sel ? "active" : ""}">
+      <span class="swatch" style="background:${r.color}"></span>
+      <span class="grow">Riff ${r.id + 1}<br><span class="hint">${r.L} bar${r.L > 1 ? "s" : ""} × ${r.starts.length}, from bar ${r.starts[0] + 1}</span></span>
+      ${edited ? `<span class="tag edit">edited</span>` : prob ? `<span class="tag warn">${esc(prob)}</span>` : r.groups ? `<span class="tag ok">matches</span>` : ""}
+    </button>`;
+  }).join("") + `<div class="hint" style="margin-top:6px">Riffs cover ${pct(covered / total)} of the ${total} Expert notes as opened.
+    ${S.pitch ? `<br><button class="btn small" id="fixall" style="margin-top:6px">Suggest frets from pitch for every riff</button>` : ""}</div>`;
+  el.querySelectorAll("[data-riff]").forEach(b => b.onclick = () => selectRiff(+b.dataset.riff));
+  const fa = $("#fixall"); if (fa) fa.onclick = () => { snapshot(); S.riffs.forEach(applySuggestion); renderAll(); };
+}
+function selectRiff(i, jump = true) {
+  S.sel = i; loop = null;
+  const r = S.riffs[i];
+  if (jump && r) { const a = S.barSec[r.starts[0]], z = S.barSec[r.starts[0] + r.L]; S.view.t0 = Math.max(0, a - (S.view.span - (z - a)) / 2); }
+  renderRiffs(); renderEditor(); draw();
+}
+
+function renderEditor() {
+  const el = $("#editor"), r = S.riffs[S.sel];
+  if (!r) { el.innerHTML = `<h3>Riff</h3><div class="hint">Pick a riff.</div>`; return; }
+  const [ta, tz] = winOf(r, 0), a = secOf(ta), z = secOf(tz);
+  const steps = notesIn(ta, tz).map(n => n.tick - ta);       // the first repeat, as it is now
+  const key = rel => { const n = noteAt(ta + rel); return n ? n.lanes.join("") : null; };
+  // Steps grouped by the fret(s) they're on. The groups hold while each is still on one fret, so
+  // moving O to B and then B to R swaps them instead of lumping all the steps together.
+  const valid = r.rows && r.rows.flat().length === steps.length
+    && r.rows.every(rels => rels.every(rel => key(rel) !== null && key(rel) === key(rels[0])));
+  if (!valid) {
+    const by = new Map();
+    steps.forEach(rel => { const k = key(rel); (by.get(k) || by.set(k, []).get(k)).push(rel); });
+    r.rows = [...by.values()];
+  }
+  const stepNo = rel => steps.indexOf(rel) + 1;
+  const canSuggest = S.pitch && r.groups && r.groups.length;
+  el.innerHTML = `
+    <div class="row" style="justify-content:space-between"><h3 style="margin:0">Riff ${r.id + 1}
+      <span class="hint">· ${steps.length} notes, repeated ${r.starts.length} times</span></h3>
+      <div class="row"><button class="btn small" id="loop">${loop ? "Stop loop" : "Loop it"}</button></div></div>
+    <canvas id="template" style="margin-top:8px"></canvas>
+    <div class="hint">Click a step's lane to set its fret, or an empty spot to add a note (Shift-click for a chord, right-click
+      removes). Changes here apply to all ${r.starts.length} repeats straight away. Dashed rings show the original frets.</div>
+    <div class="map">${r.rows.map(rels => `
+      <div class="pname">Step${rels.length > 1 ? "s" : ""} ${rels.map(stepNo).join(", ")}</div>
+      <div class="frets">${ROWS.map(l => `<button class="fret ${key(rels[0]) === String(l) ? "on" : ""}" style="--fc:${COLOR[l]}" data-rels="${rels.join(",")}" data-lane="${l}"
+        title="Put ${rels.length > 1 ? `these ${rels.length} steps` : "this step"} on ${NAME[l] === "P" ? "open" : NAME[l]}">${NAME[l]}</button>`).join("")}</div>`).join("")}
+    </div>
+    <div class="row">
+      ${canSuggest ? `<button class="btn" id="suggest">Suggest frets from pitch</button>` : ""}
+      <button class="btn" id="revert" ${riffEdited(r) ? "" : "disabled"}>Put this riff back</button>
+    </div>
+    <div class="hint" style="margin-top:6px">${!S.pitch ? (S.pitchState === "nostem" ? "No stem, so no pitch hints." : "Pitch hints appear once the stem has been listened to.")
+      : `The note names above the steps are the stem's best guess for the riff as it was charted, and the percentage is how many
+         repeats agree. On heavily distorted guitar and power chords they're often wrong, so trust your ears.`}</div>`;
+  $("#loop").onclick = () => { if (loop) { loop = null; pauseAudio(); } else { loop = [a, z]; playAudio(a); } renderEditor(); };
+  el.querySelectorAll(".fret").forEach(b => b.onclick = () => {
+    snapshot(); b.dataset.rels.split(",").forEach(rel => editLane(ta + +rel, +b.dataset.lane, false, true)); renderAll();
+  });
+  const sg = $("#suggest"); if (sg) sg.onclick = () => { snapshot(); applySuggestion(r); renderAll(); };
+  const rv = $("#revert"); if (rv) rv.onclick = () => {
+    snapshot();
+    r.starts.forEach((_, k) => {
+      const [wa, wz] = winOf(r, k);
+      S.notes = S.notes.filter(n => n.tick < wa || n.tick >= wz);
+      S.orig.filter(o => o.tick >= wa && o.tick < wz).forEach(o => insertNote(clone(o)));
+    });
+    renderAll();
+  };
+  drawTemplate();
+  const cv = $("#template");
+  const hit = e => {
+    const rect = cv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const geo = templateGeo(cv), row = Math.floor((y - geo.top) / geo.lh);
+    let best = null, bd = 12;
+    steps.forEach(rel => { const d = Math.abs(geo.X(ta + rel) - x); if (d < bd) { bd = d; best = rel; } });
+    return { lane: row >= 0 && row < 6 ? ROWS[row] : null, rel: best, tick: snapTick(geo.tickAt(x)) };
+  };
+  cv.onclick = e => {
+    const h = hit(e); if (h.lane === null) return;
+    snapshot();
+    if (h.rel !== null) editLane(ta + h.rel, h.lane, e.shiftKey, true);
+    else if (h.tick >= ta && h.tick < tz) addNote(h.tick, h.lane, true);
+    renderAll();
+  };
+  cv.oncontextmenu = e => {
+    e.preventDefault();
+    const h = hit(e); if (h.rel === null) return;
+    snapshot(); deleteNotes(repeatsOf(ta + h.rel, true)); renderAll();
+  };
+}
+
+// ------------------------------------------------------------------ save
+function renderSave() {
+  const c = changeCounts(), name = S.settings?.charter_name || "";
+  const credited = name && (S.chart.info.charter || "").toLowerCase().split(/[,&/;]/).map(s => s.trim()).includes(name.toLowerCase());
+  $("#savecard").innerHTML = `
+    <h3>Save</h3>
+    <div class="row">
+      <button class="btn primary" id="save" ${c.total || S.rebuild ? "" : "disabled"}>Save to notes.mid</button>
+      <button class="btn" id="undo" ${S.undo.length ? "" : "disabled"}>Undo</button>
+      <button class="btn" id="redo" ${S.redo.length ? "" : "disabled"}>Redo</button>
+      <label class="opt"><input type="checkbox" id="rebuild" ${S.rebuild ? "checked" : ""}> Also rebuild Hard, Medium and Easy from Expert</label>
+      ${S.chart.has_backup ? `<button class="btn danger" id="restore">Restore the original chart</button>` : ""}
+    </div>
+    <div class="note" style="margin-top:6px">${c.total} Expert note${c.total === 1 ? "" : "s"} changed. Saving changes only this song's
+      ${S.inst} notes; the first save keeps the original as <code>notes.mid.orig</code>.
+      ${!name ? `<span class="err">Set your charter name (bottom left) to be credited in song.ini.</span>`
+        : credited ? `You're already credited (charter = ${esc(S.chart.info.charter)}).`
+        : `Saving adds you to the credits: charter = ${esc(S.chart.info.charter ? `${S.chart.info.charter},${name}` : name)}.`}
+      In YARG, rescan your songs to pick up the change (scores for the old chart won't carry over).</div>
+    <div id="savemsg" class="note"></div>`;
+  $("#rebuild").onchange = e => { S.rebuild = e.target.checked; renderSave(); };
+  $("#undo").onclick = undo;
+  $("#redo").onclick = redo;
+  $("#save").onclick = save;
+  const rs = $("#restore");
+  if (rs) rs.onclick = async () => {
+    if (!confirm("Put the original notes.mid back? Every change saved here for this song (guitar and bass) is lost, and the song.ini credit goes back to how it was.")) return;
+    try { await post("restore", { song: S.path }); openSong(S.path, S.inst); } catch (e) { $("#savemsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+}
+async function save() {
+  $("#save").disabled = true;
+  try {
+    const r = await post("save", { song: S.path, instrument: S.inst, rebuild_lower: S.rebuild,
+      expert: S.notes.map(n => ({ tick: n.tick, len: n.len, lanes: n.lanes, force: n.force, ...(n.lens ? { lens: n.lens } : {}) })) });
+    S.chart = await getJSON(`/api/doctor/chart?song=${encodeURIComponent(S.path)}`);
+    openInstrument(S.inst, { view: { ...S.view }, sel: S.sel });
+    $("#savemsg").innerHTML = `<span style="color:var(--keep)">Saved: ${Object.entries(r.counts).sort((a, b) => b[0] - a[0])
+      .map(([d, n]) => `${["Easy", "Medium", "Hard", "Expert"][d]} ${n} notes`).join(", ")}${r.credited ? `. song.ini: charter = ${esc(r.credited)}` : ""}.</span>`;
+  } catch (e) { $("#savemsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; $("#save").disabled = false; }
+}
+
+// ------------------------------------------------------------------ pitch
+async function loadPitch() {
+  const path = S.path, inst = S.inst;
+  const q = `song=${encodeURIComponent(path)}&instrument=${inst}`;
+  try {
+    let p = await getJSON(`/api/doctor/pitch?${q}`);
+    if (p.missing) {
+      const { job } = await post("pitch", { song: path, instrument: inst });
+      let st;
+      do { await new Promise(r => setTimeout(r, 1000)); st = await getJSON(`/api/job/${job}`); }
+      while (st.status === "queued" || st.status === "running");
+      if (st.status === "error") throw new Error(st.error);
+      p = await getJSON(`/api/doctor/pitch?${q}`);
+    }
+    if (S.path !== path || S.inst !== inst) return;
+    S.pitch = p; S.pcache = new Map(); S.pitchState = "ok";
+    const v = []; for (let i = 0; i < p.midi.length; i++) if (p.conf[i] >= VOICED && p.level[i] >= LOUD && p.midi[i] > 0) v.push(p.midi[i]);
+    v.sort((a, b) => a - b);
+    let lo = Math.floor(v[Math.floor(v.length * 0.02)] || 40) - 2, hi = Math.ceil(v[Math.floor(v.length * 0.98)] || 76) + 2;
+    if (hi - lo < 14) { const mid = (hi + lo) / 2; lo = Math.floor(mid - 7); hi = Math.ceil(mid + 7); }
+    S.range = [lo, hi];
+    S.riffs.forEach(analyseRiff);
+    renderAll();
+  } catch (e) {
+    if (S.path === path) { S.pitchState = { error: `Couldn't listen to the stem: ${e.message}` }; renderDiagnosis(); }
+  }
+}
+
+// ------------------------------------------------------------------ audio
+async function decode(file) {
+  actx = actx || new AudioContext();
+  const data = await (await fetch(`/api/doctor/audio?song=${encodeURIComponent(S.path)}&file=${encodeURIComponent(file)}`)).arrayBuffer();
+  return actx.decodeAudioData(data);
+}
+async function loadAudio(file, key) {
+  const path = S.path;
+  try { const b = await decode(file); if (S.path === path) buffers[key] = [b]; } catch (e) { console.warn(file, e); }
+}
+async function loadBand() {
+  if (buffers._band || S.bandLoading) return;
+  S.bandLoading = true;
+  const stem = S.chart.instruments[S.inst].stem;
+  const files = S.chart.audio.filter(f => f !== stem && f !== "crowd.ogg");
+  const path = S.path;
+  const bufs = (await Promise.all(files.map(f => decode(f).catch(() => null)))).filter(Boolean);
+  S.bandLoading = false;
+  if (S.path !== path) return;
+  buffers._band = bufs;
+  if (playing) playAudio(currentPos());
+}
+function currentPos() {
+  if (!playing) return pos;
+  let p = startPos + (actx.currentTime - startedAt);
+  if (loop && p >= loop[1]) p = loop[0] + ((p - loop[0]) % (loop[1] - loop[0]));
+  return p;
+}
+function playAudio(from) {
+  if (!buffers._stem) return;
+  stopAudio();
+  actx.resume();
+  if (loop && (from < loop[0] || from >= loop[1])) from = loop[0];
+  startPos = from; startedAt = actx.currentTime + 0.05;
+  for (const key of ["_stem", "_band"]) {
+    if (!buffers[key]) continue;
+    const g = actx.createGain();
+    g.gain.value = +$(key === "_stem" ? "#vstem" : "#vband").value;
+    g.connect(actx.destination); gains[key] = g;
+    for (const b of buffers[key]) {
+      const s = actx.createBufferSource(); s.buffer = b; s.connect(g);
+      if (loop) { s.loop = true; s.loopStart = loop[0]; s.loopEnd = loop[1]; }
+      s.start(startedAt, from); sources.push(s);
+    }
+  }
+  playing = true; $("#play").textContent = "Pause";
+  requestAnimationFrame(tick);
+}
+function stopAudio() {
+  for (const s of sources) try { s.stop(); } catch {}
+  sources = []; gains = {};
+  if (playing) pos = currentPos();
+  playing = false;
+  const b = $("#play"); if (b) b.textContent = "Play";
+}
+function pauseAudio() { pos = currentPos(); stopAudio(); draw(); }
+function seek(t) { pos = Math.max(0, t); if (playing) playAudio(pos); else draw(); }
+function tick() {
+  if (!playing) return;
+  const p = currentPos();
+  if (p >= S.chart.duration + 2) { pauseAudio(); return; }
+  const v = S.view;
+  if (p > v.t0 + v.span * 0.85 || p < v.t0) v.t0 = Math.max(0, p - v.span * 0.15);
+  draw(p);
+  requestAnimationFrame(tick);
+}
+
+// ------------------------------------------------------------------ drawing
+function fit(cv) {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  return [g, w, h];
+}
+const GEO = { ruler: 20, pitch: 196, gap: 10, lane: 22 };
+const laneTop = () => GEO.ruler + GEO.pitch + GEO.gap;
+const rowY = lane => laneTop() + ROWS.indexOf(lane) * GEO.lane + GEO.lane / 2;
+const GEM_W = 10;
+// One gem: strum notes solid, HOPOs with a white dot, taps hollow; open notes are a purple bar.
+function drawGem(g, x, y, lane, kind, h = 14) {
+  const c = COLOR[lane];
+  if (kind === "tap") {
+    g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.roundRect(x - 0.5, y - h / 2 + 1.5, GEM_W - 1, h - 3, 4); g.stroke();
+    return;
+  }
+  g.fillStyle = c; g.beginPath();
+  if (lane === OPEN) g.roundRect(x - 3, y - 4, GEM_W + 6, 8, 4); else g.roundRect(x - 1, y - h / 2, GEM_W + 2, h, 4);
+  g.fill();
+  if (kind === "hopo") { g.fillStyle = "#fff"; g.beginPath(); g.arc(x + GEM_W / 2, y, lane === OPEN ? 2 : 2.6, 0, 7); g.fill(); }
+}
+function drawGrid(g, X, t0, t1, top, bottom, W) {
+  const step = gridStep(), tpb = S.chart.tpb;
+  const pxStep = W / S.view.span * (secOf(tickAt(t0) + step) - t0);
+  for (let b = 0; b < S.bars.length - 1; b++) {
+    if (S.barSec[b + 1] < t0) continue; if (S.barSec[b] > t1) break;
+    const bl = S.beatLen[b];
+    if (pxStep >= 5) for (let k = S.bars[b] + step; k < S.bars[b + 1] - 0.5; k += step) {
+      const onBeat = Math.abs(((k - S.bars[b]) / bl) - Math.round((k - S.bars[b]) / bl)) < 1e-6;
+      g.fillStyle = css(onBeat ? "--beat" : "--grid"); g.fillRect(X(secOf(k)), top, 1, bottom - top);
+    }
+    if (pxStep < 5) for (let k = S.bars[b] + bl; k < S.bars[b + 1] - 0.5; k += bl) { g.fillStyle = css("--beat"); g.fillRect(X(secOf(k)), top, 1, bottom - top); }
+    g.fillStyle = css("--bar"); g.fillRect(X(S.barSec[b]), 0, 1, bottom);
+  }
+}
+function draw(p = playing ? currentPos() : pos) {
+  const cv = $("#timeline"); if (!cv) return;
+  const [g, W] = fit(cv);
+  S.W = W;
+  const { t0, span } = S.view, t1 = t0 + span, X = t => (t - t0) / span * W;
+  const lt = laneTop(), lb = lt + ROWS.length * GEO.lane;
+  const text = css("--text"), muted = css("--muted"), dot = css("--dot");
+  // lanes background and riff bands
+  ROWS.forEach((l, r) => {
+    g.fillStyle = r % 2 ? css("--lane2") : css("--lane"); g.fillRect(0, lt + r * GEO.lane, W, GEO.lane);
+    g.fillStyle = COLOR[l]; g.globalAlpha = 0.55; g.fillRect(0, lt + r * GEO.lane + 3, 3, GEO.lane - 6); g.globalAlpha = 1;
+  });
+  for (const r of S.riffs) r.starts.forEach(b => {
+    const a = S.barSec[b], z = S.barSec[b + r.L]; if (z < t0 || a > t1) return;
+    g.globalAlpha = r.id === S.sel ? 0.2 : 0.08; g.fillStyle = r.color;
+    g.fillRect(X(a), lt, X(z) - X(a), lb - lt); g.fillRect(X(a), 0, X(z) - X(a), GEO.ruler);
+    g.globalAlpha = 1;
+  });
+  drawGrid(g, X, t0, t1, GEO.ruler, lb, W);
+  // bar numbers
+  g.font = "11px system-ui"; g.textBaseline = "middle";
+  const pxBar = W / span * (S.barSec[1] - S.barSec[0] || 1);
+  for (let b = 0; b < S.bars.length - 1; b++) {
+    if (S.barSec[b + 1] < t0) continue; if (S.barSec[b] > t1) break;
+    if (pxBar > 60 || b % Math.ceil(60 / pxBar) === 0) { g.fillStyle = muted; g.fillText(String(b + 1), X(S.barSec[b]) + 3, GEO.ruler / 2); }
+  }
+  // pitch roll
+  const top = GEO.ruler, ph = GEO.pitch;
+  if (S.pitch && S.range) {
+    const [lo, hi] = S.range, rowH = ph / (hi - lo + 1), Y = m => top + ph - (m - lo + 0.5) * rowH;
+    for (let m = lo; m <= hi; m++) {
+      if ([1, 3, 6, 8, 10].includes(((m % 12) + 12) % 12)) { g.fillStyle = css("--lane2"); g.globalAlpha = 0.5; g.fillRect(0, Y(m) - rowH / 2, W, rowH); g.globalAlpha = 1; }
+      if (rowH >= 9 || m % 12 === 0) { g.fillStyle = muted; g.fillText(pname(m), 3, Y(m)); }
+    }
+    const { hop, midi, conf, level } = S.pitch;
+    const a = Math.max(0, Math.floor(t0 / hop)), z = Math.min(midi.length, Math.ceil(t1 / hop));
+    const w = Math.max(1.5, W / span * hop);
+    for (let f = a; f < z; f++) {
+      if (midi[f] <= 0 || conf[f] < 0.3 || level[f] < LOUD - 10) continue;
+      g.fillStyle = `rgba(${dot},${Math.min(1, conf[f] * (level[f] >= LOUD ? 1 : 0.35)).toFixed(2)})`;
+      g.fillRect(X(f * hop), Y(midi[f]) - 1.5, w, 3);
+    }
+    // where each charted note sits in pitch, in its fret colour
+    S.notes.forEach((n, i) => {
+      if (n.t < t0 - 1 || n.t > t1) return;
+      const q = pitchOf(S.notes, i); if (!q) return;
+      g.fillStyle = COLOR[n.lanes[0]]; g.strokeStyle = css("--panel"); g.lineWidth = 1.5;
+      g.beginPath(); g.arc(X(n.t) + GEM_W / 2, Y(q.midi), 5, 0, 7); g.fill(); g.stroke();
+    });
+  } else {
+    g.fillStyle = muted; g.font = "13px system-ui";
+    g.fillText(S.pitchState === "nostem" ? "No stem for this instrument" : S.pitchState === "loading" ? "Listening to the stem…" : "", 12, top + ph / 2);
+  }
+  // original notes that have changed or gone, as dashed outlines
+  if (S.ghost) for (const o of S.orig) {
+    if (o.t < t0 - 1 || o.t > t1) continue;
+    const n = noteAt(o.tick);
+    if (n && n.lanes.join() === o.lanes.join()) continue;
+    g.setLineDash([2, 2]); g.lineWidth = 1.5;
+    for (const l of o.lanes) { g.strokeStyle = COLOR[l]; g.beginPath(); g.roundRect(X(o.t) - 2, rowY(l) - 8, GEM_W + 4, 16, 4); g.stroke(); }
+    g.setLineDash([]);
+  }
+  // notes: sustains, then gems
+  const cutoff = S.chart.sustain_cutoff;
+  S.notes.forEach((n, i) => {
+    if (n.t > t1) return;
+    const x = X(n.t);
+    for (const l of n.lanes) {
+      const len = n.lens ? n.lens[l] ?? n.len : n.len;
+      if (len <= cutoff) continue;
+      const end = X(secOf(n.tick + len)); if (end < 0) continue;
+      g.fillStyle = COLOR[l]; g.globalAlpha = 0.55;
+      if (l === OPEN) g.fillRect(x, rowY(l) - 1.5, end - x, 3); else g.fillRect(x, rowY(l) - 2.5, end - x, 5);
+      g.globalAlpha = 1;
+    }
+  });
+  S.notes.forEach((n, i) => {
+    if (n.t > t1 || n.t < t0 - 0.5) return;
+    const x = X(n.t), kind = hopoKind(i);
+    if (n.lanes[0] === OPEN) { g.fillStyle = COLOR[OPEN]; g.globalAlpha = 0.2; g.fillRect(x - 1, lt + GEO.lane, GEM_W + 2, 5 * GEO.lane); g.globalAlpha = 1; }
+    for (const l of n.lanes) {
+      drawGem(g, x, rowY(l), l, kind);
+      if (changed(n)) { g.strokeStyle = text; g.lineWidth = 1; g.beginPath(); g.roundRect(x - 2.5, rowY(l) - 8.5, GEM_W + 5, 17, 5); g.stroke(); }
+    }
+  });
+  // selection being dragged, picked notes, the note under the pointer
+  if (S.drag && S.drag.mode === "select") {
+    const da = Math.min(S.drag.a, S.drag.b), db = Math.max(S.drag.a, S.drag.b);
+    g.fillStyle = css("--accent"); g.globalAlpha = 0.18; g.fillRect(X(da), lt, X(db) - X(da), lb - lt); g.globalAlpha = 1;
+  }
+  const ring = (tick, color, w) => {
+    const n = noteAt(tick); if (!n || n.t > t1 || n.t < t0 - 1) return;
+    g.strokeStyle = color; g.lineWidth = w;
+    for (const l of n.lanes) { g.beginPath(); g.roundRect(X(n.t) - 5, rowY(l) - 10, GEM_W + 10, 20, 6); g.stroke(); }
+  };
+  for (const t of S.picked) ring(t, css("--accent"), 2.5);
+  if (S.hover != null) ring(S.hover, text, 1.5);
+  // where a click would add a note
+  if (S.ghostAdd && !S.drag) {
+    const { tick: gt, lane } = S.ghostAdd;
+    g.globalAlpha = 0.45; drawGem(g, X(secOf(gt)), rowY(lane), lane, "strum"); g.globalAlpha = 1;
+  }
+  // playhead
+  if (p >= t0 && p <= t1) { g.fillStyle = css("--danger"); g.fillRect(X(p), 0, 1.5, lb); }
+  const te = $("#time"); if (te) te.textContent = fmt(p);
+  const gn = $("#gridnow"); if (gn) gn.textContent = S.grid === "auto" ? `(1/${gridDiv()})` : "";
+  drawOverview(p);
+}
+function drawOverview(p) {
+  const cv = $("#overview"); if (!cv) return;
+  const [g, W, H] = fit(cv), D = Math.max(1, S.chart.duration), X = t => t / D * W;
+  g.fillStyle = css("--lane"); g.fillRect(0, 0, W, H);
+  for (const r of S.riffs) r.starts.forEach(b => {
+    g.globalAlpha = r.id === S.sel ? 0.45 : 0.22; g.fillStyle = r.color;
+    g.fillRect(X(S.barSec[b]), 0, Math.max(1, X(S.barSec[b + r.L]) - X(S.barSec[b])), H);
+  });
+  g.globalAlpha = 1;
+  const lh = (H - 4) / ROWS.length;
+  S.notes.forEach(n => {
+    const w = changed(n) ? 2 : 1;
+    for (const l of n.lanes) { g.fillStyle = COLOR[l]; g.fillRect(X(n.t), 2 + ROWS.indexOf(l) * lh, w, lh - 1); }
+  });
+  g.strokeStyle = css("--text"); g.lineWidth = 1.5;
+  g.strokeRect(X(S.view.t0), 1, Math.max(3, X(S.view.span)), H - 2);
+  g.fillStyle = css("--danger"); g.fillRect(X(p), 0, 1.5, H);
+}
+function templateGeo(cv) {
+  const r = S.riffs[S.sel], W = cv.clientWidth, [a, z] = winOf(r, 0), pad = 18;
+  return { top: 34, lh: 17, X: tick => pad + (tick - a) / (z - a) * (W - 2 * pad),
+           tickAt: x => a + (x - pad) / (W - 2 * pad) * (z - a), a, z };
+}
+function drawTemplate() {
+  const cv = $("#template"), r = S.riffs[S.sel]; if (!cv || !r) return;
+  const [g, W] = fit(cv), geo = templateGeo(cv);
+  const y = lane => geo.top + ROWS.indexOf(lane) * geo.lh + geo.lh / 2;
+  ROWS.forEach((l, i) => { g.fillStyle = i % 2 ? css("--lane2") : css("--lane"); g.fillRect(0, geo.top + i * geo.lh, W, geo.lh);
+    g.fillStyle = COLOR[l]; g.globalAlpha = 0.55; g.fillRect(0, geo.top + i * geo.lh + 3, 3, geo.lh - 6); g.globalAlpha = 1; });
+  const b0 = r.starts[0], bl = S.beatLen[b0], bottom = geo.top + ROWS.length * geo.lh;
+  const step = gridStep();
+  for (let k = geo.a; k <= geo.z + 0.5; k += step) {
+    const onBar = r.L > 0 && S.bars.slice(b0, b0 + r.L + 1).includes(Math.round(k));
+    const onBeat = Math.abs(((k - geo.a) / bl) - Math.round((k - geo.a) / bl)) < 1e-6;
+    g.fillStyle = css(onBar ? "--bar" : onBeat ? "--beat" : "--grid"); g.fillRect(geo.X(k), geo.top - 4, onBar ? 2 : 1, bottom - geo.top + 4);
+  }
+  g.textAlign = "center"; g.textBaseline = "middle";
+  // the stem's guess at each step of the riff as charted
+  if (r.slots) r.rels.forEach((rel, j) => {
+    const s = r.slots[j], x = geo.X(geo.a + rel);
+    g.font = "600 11px system-ui"; g.fillStyle = s.pitch ? css("--text") : css("--muted");
+    g.fillText(s.pitch ? NAMES[s.pitch.pc] : "?", x, 10);
+    g.font = "10px system-ui"; g.fillStyle = css("--muted");
+    if (s.pitch) g.fillText(pct(s.pitch.agree), x, 23);
+  });
+  const now = notesIn(geo.a, geo.z);
+  now.forEach((n, j) => {
+    const x = geo.X(n.tick), i = findIdx(n.tick);
+    for (const l of n.lanes) drawGem(g, x - GEM_W / 2, y(l), l, hopoKind(i), 12);
+    g.font = "10px system-ui"; g.fillStyle = css("--muted");
+    g.fillText(String(j + 1), x, bottom + 9);
+  });
+  for (const o of S.orig.filter(o => o.tick >= geo.a && o.tick < geo.z)) {
+    const n = noteAt(o.tick);
+    if (n && n.lanes.join() === o.lanes.join()) continue;
+    g.setLineDash([3, 2]); g.lineWidth = 1.5;
+    for (const l of o.lanes) { g.strokeStyle = COLOR[l]; g.beginPath(); g.arc(geo.X(o.tick), y(l), 7, 0, 7); g.stroke(); }
+    g.setLineDash([]);
+  }
+  g.textAlign = "left";
+}
+
+// ------------------------------------------------------------------ timeline interaction
+function setupTimeline() {
+  const cv = $("#timeline"), ov = $("#overview");
+  cv.addEventListener("wheel", e => {
+    const v = S.view, rect = cv.getBoundingClientRect(), at = v.t0 + (e.clientX - rect.left) / rect.width * v.span;
+    const sideways = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (!(e.ctrlKey || e.metaKey) && !sideways) return;  // a plain wheel scrolls the page
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) zoom(Math.exp(e.deltaY * 0.0015), at);
+    else { v.t0 = Math.max(0, Math.min(S.chart.duration - v.span / 2, v.t0 + (e.shiftKey ? e.deltaY || e.deltaX : e.deltaX) / rect.width * v.span * 0.6)); draw(); }
+  }, { passive: false });
+  const at = e => {  // pointer -> time, lane (null above the lanes), the note in reach
+    const rect = cv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top, v = S.view;
+    const row = Math.floor((y - laneTop()) / GEO.lane), lane = row >= 0 && row < ROWS.length ? ROWS[row] : null;
+    const X = tt => (tt - v.t0) / v.span * rect.width;
+    let note = null, bd = 9;
+    if (lane !== null) for (const n of S.notes) {
+      if (n.t < v.t0 - 1) continue; if (n.t > v.t0 + v.span + 1) break;
+      const d = Math.abs(X(n.t) + GEM_W / 2 - x); if (d < bd) { bd = d; note = n.tick; }
+    }
+    const sec = v.t0 + x / rect.width * v.span;
+    return { x, sec, tick: tickAt(sec), lane, note, onGem: note !== null && noteAt(note).lanes.includes(lane) };
+  };
+  let down = null;
+  cv.addEventListener("mousedown", e => { if (e.button === 0) { down = { ...at(e), shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey }; e.preventDefault(); } });
+  cv.addEventListener("mousemove", e => {
+    if (down) return;
+    const h = at(e);
+    cv.style.cursor = h.note !== null ? (h.onGem ? "pointer" : "copy") : h.lane !== null ? "cell" : "text";
+    const ghost = h.note === null && h.lane !== null ? { tick: snapTick(h.tick), lane: h.lane } : null;
+    if (h.note !== S.hover || JSON.stringify(ghost) !== JSON.stringify(S.ghostAdd)) { S.hover = h.note; S.ghostAdd = ghost; draw(); }
+  });
+  cv.addEventListener("mouseleave", () => { if (S.hover != null || S.ghostAdd) { S.hover = null; S.ghostAdd = null; draw(); } });
+  cv.addEventListener("contextmenu", e => {
+    const h = at(e);
+    if (h.note === null) return;
+    e.preventDefault();
+    snapshot(); deleteNotes(repeatsOf(h.note)); S.hover = null; renderAll();
+  });
+  S.onMove = e => {
+    if (!down) return;
+    const h = at(e);
+    if (!S.drag) {
+      if (Math.abs(h.x - down.x) < 5) return;
+      // dragging from a note sets its sustain; from anywhere else, selects
+      S.drag = down.onGem ? { mode: "sustain", tick: down.note } : { mode: "select", a: down.sec, b: h.sec };
+      if (S.drag.mode === "sustain") snapshot();
+    }
+    if (S.drag.mode === "select") S.drag.b = h.sec;
+    else {
+      const end = snapTick(h.tick), len = end - S.drag.tick;
+      setLength(S.drag.tick, len > S.chart.sustain_cutoff ? len : noSustain());
+    }
+    draw();
+  };
+  S.onUp = () => {
+    if (!down) return;
+    const start = down; down = null;
+    if (S.drag) {
+      const d = S.drag; S.drag = null;
+      if (d.mode === "select") {
+        const a = Math.min(d.a, d.b), b = Math.max(d.a, d.b);
+        if (!start.shift) S.picked.clear();
+        S.notes.forEach(n => { if (n.t >= a && n.t <= b) S.picked.add(n.tick); });
+        renderSelBar(); draw();
+      } else renderAll();
+      return;
+    }
+    if (start.lane === null) {                       // above the lanes: seek
+      if (S.picked.size && !start.shift) { S.picked.clear(); renderSelBar(); }
+      seek(start.sec); return;
+    }
+    if (start.note !== null && start.onGem && !start.shift) {   // a note itself: select it
+      if (start.ctrl) { S.picked.has(start.note) ? S.picked.delete(start.note) : S.picked.add(start.note); }
+      else S.picked = new Set([start.note]);
+      renderSelBar(); draw(); return;
+    }
+    snapshot();
+    if (start.note !== null) editLane(start.note, start.lane, start.shift);   // its column, another lane
+    else addNote(snapTick(start.tick), start.lane);                           // an empty spot
+    S.ghostAdd = null;
+    renderAll();
+  };
+  let dragging = false;
+  const ovMove = e => {
+    const rect = ov.getBoundingClientRect();
+    S.view.t0 = Math.max(0, (e.clientX - rect.left) / rect.width * S.chart.duration - S.view.span / 2); draw();
+  };
+  ov.addEventListener("mousedown", e => { dragging = true; ovMove(e); });
+  S.onOverview = e => dragging && ovMove(e);
+  S.onOverviewUp = () => dragging = false;
+}
+// Window-wide pointer handlers, added once; the timeline (rebuilt with the page) sets what they call.
+addEventListener("mousemove", e => { S.onMove && S.onMove(e); S.onOverview && S.onOverview(e); });
+addEventListener("mouseup", e => { S.onUp && S.onUp(e); S.onOverviewUp && S.onOverviewUp(e); });
+addEventListener("keydown", e => {
+  if (!S.chart || !S.notes || (e.target.matches && e.target.matches("input[type=text], textarea, select"))) return;
+  const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+  if (e.code === "Space") { e.preventDefault(); playing ? pauseAudio() : playAudio(pos); }
+  else if (ctrl && (k === "z" || k === "Z")) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (ctrl && (k === "y" || k === "Y")) { e.preventDefault(); redo(); }
+  else if (ctrl && k === "a") { e.preventDefault(); S.notes.forEach(n => S.picked.add(n.tick)); renderSelBar(); draw(); }
+  else if (k === "Escape" && S.picked.size) { S.picked.clear(); renderSelBar(); draw(); }
+  else if ((k === "ArrowUp" || k === "ArrowDown") && S.picked.size) { e.preventDefault(); shiftPicked(k === "ArrowUp" ? -1 : 1); }
+  else if ((k === "ArrowLeft" || k === "ArrowRight") && S.picked.size) { e.preventDefault(); nudgePicked(k === "ArrowLeft" ? -1 : 1); }
+  else if (k === "ArrowRight") { S.view.t0 += S.view.span * 0.25; draw(); }
+  else if (k === "ArrowLeft") { S.view.t0 = Math.max(0, S.view.t0 - S.view.span * 0.25); draw(); }
+  else if (k === "Delete" || k === "Backspace") {
+    const ts = targets(); if (!ts.length) return;
+    e.preventDefault(); snapshot(); deleteNotes(ts); S.hover = null; renderAll();
+  }
+  else if (k === "h" || k === "H") {
+    const ts = targets(); if (!ts.length) return;
+    const anyStrum = ts.some(t => hopoKind(findIdx(t)) === "strum");
+    snapshot(); setHopo(ts, anyStrum ? "hopo" : "strum"); renderAll();
+  }
+  else if (k === "s" || k === "S") { S.snap = !S.snap; const c = $("#snap"); if (c) c.checked = S.snap; draw(); }
+  else if (k === "+" || k === "=") zoom(1 / 1.5);
+  else if (k === "-" || k === "_") zoom(1.5);
+});
+addEventListener("resize", () => { if (S.chart) { draw(); drawTemplate(); } });
+
+// ------------------------------------------------------------------ start
+(() => {
+  loadSettings();
+  const root = store.get("doctor-root");
+  if (root) { $("#root").value = root; listSongs(); }
+  const q = new URLSearchParams(location.search);
+  if (q.get("song")) openSong(q.get("song"), q.get("inst"));
+})();
+</script>
+</body>
+</html>
